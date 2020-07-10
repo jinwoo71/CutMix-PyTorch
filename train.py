@@ -19,8 +19,15 @@ import resnet as RN
 import pyramidnet as PYRM
 import utils
 import numpy as np
-
+import torchvision.utils
+from torchvision.utils import save_image
 import warnings
+from matplotlib import pyplot as plt
+import matplotlib.gridspec as gridspec
+
+import net
+from function import adaptive_instance_normalization, coral
+import torch.nn.functional as F
 
 warnings.filterwarnings("ignore")
 
@@ -61,7 +68,8 @@ parser.add_argument('--beta', default=0, type=float,
                     help='hyperparameter beta')
 parser.add_argument('--cutmix_prob', default=0, type=float,
                     help='cutmix probability')
-
+parser.add_argument('--vgg', type=str, default='models/vgg_normalised.pth')
+parser.add_argument('--decoder', type=str, default='models/decoder.pth')
 parser.set_defaults(bottleneck=True)
 parser.set_defaults(verbose=True)
 
@@ -72,11 +80,23 @@ best_err5 = 100
 def main():
     global args, best_err1, best_err5
     args = parser.parse_args()
+    print("args")
+    global decoder, vgg
+    decoder = net.decoder
+    vgg = net.vgg
+    decoder.eval()
+    vgg.eval()
+    decoder.load_state_dict(torch.load(args.decoder))
+    vgg.load_state_dict(torch.load(args.vgg))
+    vgg = nn.Sequential(*list(vgg.children())[:31])
+    vgg.cuda()
+    decoder.cuda()
 
     if args.dataset.startswith('cifar'):
         normalize = transforms.Normalize(mean=[x / 255.0 for x in [125.3, 123.0, 113.9]],
                                          std=[x / 255.0 for x in [63.0, 62.1, 66.7]])
-
+#        normalize = transforms.Normalize(mean=[0.5, 0.5, 0.5],
+#                                         std=[0.5, 0.5, 0.5])
         transform_train = transforms.Compose([
             transforms.RandomCrop(32, padding=4),
             transforms.RandomHorizontalFlip(),
@@ -223,7 +243,31 @@ def train(train_loader, model, criterion, optimizer, epoch):
 
         input = input.cuda()
         target = target.cuda()
-
+        #content = input[1:5]
+        #style = input[6:10]
+        content = input[0].unsqueeze(0)
+        style = input[1].unsqueeze(0)
+        print(content.shape)
+        #content = F.interpolate(content, size=(512, 512))
+        #style = F.interpolate(style, size=(512, 512))
+        print(content.shape)
+        al = 0.0
+        with torch.no_grad():
+            output = style_transfer(vgg, decoder, content, style, al)
+        output = output.cpu()
+        content_name = 'content'+str(i)+'.png'
+        style_name = 'style'+str(i)+'.png'
+        output_name = 'test'+str(i)+'.png'
+        content = renormalize(content)
+        style = renormalize(style)
+        output = renormalize(output)
+        #content = F.interpolate(content, size=(32, 32))
+        #style = F.interpolate(style, size=(32, 32))
+        #output = F.interpolate(output, size=(32, 32))
+        grid = torch.stack([content.cpu().squeeze(0), output.cpu().squeeze(0), style.cpu().squeeze(0)], dim = 0)
+        img_grid = torchvision.utils.make_grid(grid)
+        grid_name = 'grid_right'+str(i)+'.png'
+        save_image(img_grid, grid_name)
         r = np.random.rand(1)
         if args.beta > 0 and r < args.cutmix_prob:
             # generate mixed sample
@@ -233,6 +277,9 @@ def train(train_loader, model, criterion, optimizer, epoch):
             target_b = target[rand_index]
             bbx1, bby1, bbx2, bby2 = rand_bbox(input.size(), lam)
             input[:, :, bbx1:bbx2, bby1:bby2] = input[rand_index, :, bbx1:bbx2, bby1:bby2]
+            filename =  'img' + str(i) + '.png'
+            image_grid = torchvision.utils.make_grid(input)
+
             # adjust lambda to exactly match pixel ratio
             lam = 1 - ((bbx2 - bbx1) * (bby2 - bby1) / (input.size()[-1] * input.size()[-2]))
             # compute output
@@ -404,6 +451,43 @@ def accuracy(output, target, topk=(1,)):
 
     return res
 
+def renormalize(img):
+    return (img+1)/2
+
+def imshow(img):
+    img = img.cpu().detach()
+    #img = (img+1)/2
+    img = img.squeeze().numpy()
+    img = np.transpose(img, (1, 2, 0))
+    plt.imshow((img*255).astype(np.uint8))
+    plt.show()
+
+def test_transform(size, crop):
+    transform_list = []
+    if size != 0:
+        transform_list.append(transforms.Resize(size))
+    if crop:
+        transform_list.append(transforms.CenterCrop(size))
+    transform_list.append(transforms.ToTensor())
+    transform = transforms.Compose(transform_list)
+    return transform
+
+def style_transfer(vgg, decoder, content, style, alpha=1.0, interpolation_weights=None):
+    assert (0.0 <= alpha <= 1.0)
+    print(alpha)
+    content_f = vgg(content)
+    style_f = vgg(style)
+    if interpolation_weights:
+        _, C, H, W = content_f.size()
+        feat = torch.FloatTensor(1, C, H, W).zero_().to(device)
+        base_feat = adaptive_instance_normalization(content_f, style_f)
+        for i, w in enumerate(interpolation_weights):
+            feat = feat + w * base_feat[i:i + 1]
+        content_f = content_f[0:1]
+    else:
+        feat = adaptive_instance_normalization(content_f, style_f)
+    feat = feat * alpha + content_f * (1 - alpha)
+    return decoder(feat)
 
 if __name__ == '__main__':
     main()

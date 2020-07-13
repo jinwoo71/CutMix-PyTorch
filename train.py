@@ -84,7 +84,7 @@ class UnNormalize(object):
         self.std=std
     def __call__(self, tensor):
         for t, m, s in zip(tensor, self.mean, self.std):
-            t_mul_(s).add_(m)
+            t.mul_(s).add_(m)
         return tensor
 unorm = UnNormalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225))
 def main():

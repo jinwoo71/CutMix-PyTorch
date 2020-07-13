@@ -25,12 +25,13 @@ import warnings
 from matplotlib import pyplot as plt
 import matplotlib.gridspec as gridspec
 
+from torch.utils.tensorboard import SummaryWriter
 import net
 from function import adaptive_instance_normalization, coral
 import torch.nn.functional as F
 
 warnings.filterwarnings("ignore")
-
+writer = SummaryWriter('runs/naver')
 model_names = sorted(name for name in models.__dict__
                      if name.islower() and not name.startswith("__")
                      and callable(models.__dict__[name]))
@@ -69,14 +70,23 @@ parser.add_argument('--beta', default=0, type=float,
 parser.add_argument('--cutmix_prob', default=0, type=float,
                     help='cutmix probability')
 parser.add_argument('--vgg', type=str, default='models/vgg_normalised.pth')
-parser.add_argument('--decoder', type=str, default='models/decoder.pth')
+#parser.add_argument('--decoder', type=str, default='models/decoder.pth')
+parser.add_argument('--decoder', type=str, default='models/decoder_iter_100.pth.tar')
 parser.set_defaults(bottleneck=True)
 parser.set_defaults(verbose=True)
 
 best_err1 = 100
 best_err5 = 100
 
-
+class UnNormalize(object):
+    def __init__(self, mean, std):
+        self.mean=mean
+        self.std=std
+    def __call__(self, tensor):
+        for t, m, s in zip(tensor, self.mean, self.std):
+            t_mul_(s).add_(m)
+        return tensor
+unorm = UnNormalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225))
 def main():
     global args, best_err1, best_err5
     args = parser.parse_args()
@@ -95,8 +105,6 @@ def main():
     if args.dataset.startswith('cifar'):
         normalize = transforms.Normalize(mean=[x / 255.0 for x in [125.3, 123.0, 113.9]],
                                          std=[x / 255.0 for x in [63.0, 62.1, 66.7]])
-#        normalize = transforms.Normalize(mean=[0.5, 0.5, 0.5],
-#                                         std=[0.5, 0.5, 0.5])
         transform_train = transforms.Compose([
             transforms.RandomCrop(32, padding=4),
             transforms.RandomHorizontalFlip(),
@@ -129,8 +137,8 @@ def main():
             raise Exception('unknown dataset: {}'.format(args.dataset))
 
     elif args.dataset == 'imagenet':
-        traindir = os.path.join('/home/data/ILSVRC/train')
-        valdir = os.path.join('/home/data/ILSVRC/val')
+        traindir = os.path.join('~/jinwoo/imagenet_temp/val/')
+        valdir = os.path.join('~/jinwoo/imagenet_temp/val/')
         normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                          std=[0.229, 0.224, 0.225])
 
@@ -243,48 +251,45 @@ def train(train_loader, model, criterion, optimizer, epoch):
 
         input = input.cuda()
         target = target.cuda()
-        #content = input[1:5]
-        #style = input[6:10]
-        content = input[0].unsqueeze(0)
-        style = input[1].unsqueeze(0)
-        print(content.shape)
-        #content = F.interpolate(content, size=(512, 512))
-        #style = F.interpolate(style, size=(512, 512))
-        print(content.shape)
-        al = 0.0
-        with torch.no_grad():
-            output = style_transfer(vgg, decoder, content, style, al)
-        output = output.cpu()
-        content_name = 'content'+str(i)+'.png'
-        style_name = 'style'+str(i)+'.png'
-        output_name = 'test'+str(i)+'.png'
-        content = renormalize(content)
-        style = renormalize(style)
-        output = renormalize(output)
-        #content = F.interpolate(content, size=(32, 32))
-        #style = F.interpolate(style, size=(32, 32))
-        #output = F.interpolate(output, size=(32, 32))
-        grid = torch.stack([content.cpu().squeeze(0), output.cpu().squeeze(0), style.cpu().squeeze(0)], dim = 0)
-        img_grid = torchvision.utils.make_grid(grid)
-        grid_name = 'grid_right'+str(i)+'.png'
-        save_image(img_grid, grid_name)
         r = np.random.rand(1)
-        if args.beta > 0 and r < args.cutmix_prob:
-            # generate mixed sample
-            lam = np.random.beta(args.beta, args.beta)
+        if r < 0.5:
             rand_index = torch.randperm(input.size()[0]).cuda()
+            content = input
+            style = input[rand_index]
             target_a = target
             target_b = target[rand_index]
-            bbx1, bby1, bbx2, bby2 = rand_bbox(input.size(), lam)
-            input[:, :, bbx1:bbx2, bby1:bby2] = input[rand_index, :, bbx1:bbx2, bby1:bby2]
-            filename =  'img' + str(i) + '.png'
-            image_grid = torchvision.utils.make_grid(input)
 
-            # adjust lambda to exactly match pixel ratio
-            lam = 1 - ((bbx2 - bbx1) * (bby2 - bby1) / (input.size()[-1] * input.size()[-2]))
-            # compute output
-            output = model(input)
-            loss = criterion(output, target_a) * lam + criterion(output, target_b) * (1. - lam)
+            #content = F.interpolate(content, size=(128, 128))
+            #style = F.interpolate(style, size=(128, 128))
+            alpha1 = 0.0
+            alpha2 = 1.0#np.random.uniform()
+
+            with torch.no_grad():
+                mixImage = style_transfer(vgg, decoder, content, style, alpha1)
+                mixImage2 = style_transfer(vgg, decoder, content, style, alpha2)
+
+            #content = F.interpolate(content, size=(32, 32))
+            #style = F.interpolate(style, size=(32, 32))
+            #mixImage = F.interpolate(mixImage, size=(32, 32))
+            #mixImage2 = F.interpolate(mixImage2, size=(32, 32))
+
+            content = renormalize(content)
+            style = renormalize(style)
+            mixImage = renormalize(mixImage)
+            mixImage2 = renormalize(mixImage2)
+
+            lam = 0.5
+            output = model(mixImage2)
+            loss = criterion(output, target_a) * lam + criterion(output, target_b) * (1. - lam) * alpha2
+
+            # for save image
+
+            grid = torch.stack([content[0].cpu().squeeze(0), mixImage[0].cpu().squeeze(0), mixImage2[0].cpu().squeeze(0), style[0].cpu().squeeze(0)], dim = 0)
+            img_grid = torchvision.utils.make_grid(
+            [unorm(tensor) for tensor in grid])
+            grid_name = 'grid_'+str(i)+'.png'
+            save_image(img_grid, grid_name)
+            writer.add_image('four_fashion_mnist_images', img_grid)
         else:
             # compute output
             output = model(input)
@@ -474,7 +479,6 @@ def test_transform(size, crop):
 
 def style_transfer(vgg, decoder, content, style, alpha=1.0, interpolation_weights=None):
     assert (0.0 <= alpha <= 1.0)
-    print(alpha)
     content_f = vgg(content)
     style_f = vgg(style)
     if interpolation_weights:

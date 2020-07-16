@@ -1,12 +1,12 @@
 python train.py \
-    --net_type pyramidnet \
+    --net_type resnet \
     --dataset imagenet \
-    --depth 200 \
-    --alpha 240 \
-    --batch_size 64 \
-    --lr 0.25 \
-    --expname PyraNet200 \
-    --epochs 100 \
+    --batch_size 256 \
+    --lr 0.1 \
+    --depth 50 \
+    --epochs 300 \
+    --expname ResNet50 \
+    -j 40 \
     --beta 1.0 \
-    --cutmix_prob 0.5 \
+    --cutmix_prob 1.0 \
     --no-verbose

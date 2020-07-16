@@ -30,8 +30,12 @@ import net
 from function import adaptive_instance_normalization, coral
 import torch.nn.functional as F
 
+# Because part of the training data is truncated image
+from PIL import ImageFile
+ImageFile.LOAD_TRUNCATED_IMAGES = True
+
 warnings.filterwarnings("ignore")
-writer = SummaryWriter('runs/naver')
+#writer = SummaryWriter('runs/naver')
 model_names = sorted(name for name in models.__dict__
                      if name.islower() and not name.startswith("__")
                      and callable(models.__dict__[name]))
@@ -70,8 +74,7 @@ parser.add_argument('--beta', default=0, type=float,
 parser.add_argument('--cutmix_prob', default=0, type=float,
                     help='cutmix probability')
 parser.add_argument('--vgg', type=str, default='models/vgg_normalised.pth')
-#parser.add_argument('--decoder', type=str, default='models/decoder.pth')
-parser.add_argument('--decoder', type=str, default='models/decoder_iter_100.pth.tar')
+parser.add_argument('--decoder', type=str, default='models/decoder_iter_75200.pth.tar')
 parser.set_defaults(bottleneck=True)
 parser.set_defaults(verbose=True)
 
@@ -137,8 +140,8 @@ def main():
             raise Exception('unknown dataset: {}'.format(args.dataset))
 
     elif args.dataset == 'imagenet':
-        traindir = os.path.join('~/jinwoo/imagenet_temp/val/')
-        valdir = os.path.join('~/jinwoo/imagenet_temp/val/')
+        traindir = os.path.join('/home_goya/jinwoo.choi/ImageNet/train/')
+        valdir = os.path.join('/home_goya/jinwoo.choi/ImageNet/val/')
         normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                          std=[0.229, 0.224, 0.225])
 
@@ -156,8 +159,8 @@ def main():
                 transforms.RandomResizedCrop(224),
                 transforms.RandomHorizontalFlip(),
                 transforms.ToTensor(),
-                jittering,
-                lighting,
+#                jittering,
+                #lighting,
                 normalize,
             ]))
 
@@ -252,6 +255,7 @@ def train(train_loader, model, criterion, optimizer, epoch):
         input = input.cuda()
         target = target.cuda()
         r = np.random.rand(1)
+        # Run style_mixup with a probability of 0.5
         if r < 0.5:
             rand_index = torch.randperm(input.size()[0]).cuda()
             content = input
@@ -259,37 +263,35 @@ def train(train_loader, model, criterion, optimizer, epoch):
             target_a = target
             target_b = target[rand_index]
 
-            #content = F.interpolate(content, size=(128, 128))
-            #style = F.interpolate(style, size=(128, 128))
-            alpha1 = 0.0
-            alpha2 = 1.0#np.random.uniform()
+            # alpha1 and mixImage1 are variables to check if the original image is displayed when alpha is 0.
+            #alpha1 = 0.0
+            alpha2 = np.random.uniform()
 
             with torch.no_grad():
-                mixImage = style_transfer(vgg, decoder, content, style, alpha1)
+                #mixImage = style_transfer(vgg, decoder, content, style, alpha1)
                 mixImage2 = style_transfer(vgg, decoder, content, style, alpha2)
 
-            #content = F.interpolate(content, size=(32, 32))
-            #style = F.interpolate(style, size=(32, 32))
-            #mixImage = F.interpolate(mixImage, size=(32, 32))
-            #mixImage2 = F.interpolate(mixImage2, size=(32, 32))
-
-            content = renormalize(content)
-            style = renormalize(style)
-            mixImage = renormalize(mixImage)
-            mixImage2 = renormalize(mixImage2)
 
             lam = 0.5
             output = model(mixImage2)
+            # when alpha2 = 0 : loss = 0.5 * criterion(output, target_a)
+            # when alpha2 = 1 : loss = 0.5 * criterion(output, target_a) + 0.5 * criterion(output, target_b)
             loss = criterion(output, target_a) * lam + criterion(output, target_b) * (1. - lam) * alpha2
 
-            # for save image
+            # The code below is for outputting an image.
 
-            grid = torch.stack([content[0].cpu().squeeze(0), mixImage[0].cpu().squeeze(0), mixImage2[0].cpu().squeeze(0), style[0].cpu().squeeze(0)], dim = 0)
-            img_grid = torchvision.utils.make_grid(
-            [unorm(tensor) for tensor in grid])
-            grid_name = 'grid_'+str(i)+'.png'
-            save_image(img_grid, grid_name)
-            writer.add_image('four_fashion_mnist_images', img_grid)
+            #content = renormalize(content)
+            #style = renormalize(style)
+            #mixImage = renormalize(mixImage)
+            #mixImage2 = renormalize(mixImage2)
+
+            #for i in range(8):
+                #grid = torch.stack([content[i].cpu().squeeze(0), mixImage[i].cpu().squeeze(0), mixImage2[i].cpu().squeeze(0), style[i].cpu().squeeze(0)], dim = 0)
+                #img_grid = torchvision.utils.make_grid(
+                #[unorm(tensor) for tensor in grid])
+                #grid_name = 'grid_'+str(i)+'.png'
+                #save_image(img_grid, grid_name)
+                #writer.add_image('four_fashion_mnist_images'+str(i), img_grid)
         else:
             # compute output
             output = model(input)

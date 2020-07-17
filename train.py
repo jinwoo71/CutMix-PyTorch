@@ -35,7 +35,7 @@ from PIL import ImageFile
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 
 warnings.filterwarnings("ignore")
-#writer = SummaryWriter('runs/naver')
+writer = SummaryWriter('runs/naver')
 model_names = sorted(name for name in models.__dict__
                      if name.islower() and not name.startswith("__")
                      and callable(models.__dict__[name]))
@@ -140,8 +140,8 @@ def main():
             raise Exception('unknown dataset: {}'.format(args.dataset))
 
     elif args.dataset == 'imagenet':
-        traindir = os.path.join('/home_goya/jinwoo.choi/ImageNet/train/')
-        valdir = os.path.join('/home_goya/jinwoo.choi/ImageNet/val/')
+        traindir = os.path.join('/home_goya/jinwoo.choi/ImageNet/100000/')
+        valdir = os.path.join('/home_goya/jinwoo.choi/ImageNet/temp_val/')
         normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                          std=[0.229, 0.224, 0.225])
 
@@ -159,7 +159,7 @@ def main():
                 transforms.RandomResizedCrop(224),
                 transforms.RandomHorizontalFlip(),
                 transforms.ToTensor(),
-#                jittering,
+                #jittering,
                 #lighting,
                 normalize,
             ]))
@@ -268,15 +268,14 @@ def train(train_loader, model, criterion, optimizer, epoch):
             alpha2 = np.random.uniform()
 
             with torch.no_grad():
-                #mixImage = style_transfer(vgg, decoder, content, style, alpha1)
+            #    mixImage = style_transfer(vgg, decoder, content, style, alpha1)
                 mixImage2 = style_transfer(vgg, decoder, content, style, alpha2)
 
 
-            lam = 0.5
             output = model(mixImage2)
-            # when alpha2 = 0 : loss = 0.5 * criterion(output, target_a)
+            # when alpha2 = 0 : loss = criterion(output, target_a)
             # when alpha2 = 1 : loss = 0.5 * criterion(output, target_a) + 0.5 * criterion(output, target_b)
-            loss = criterion(output, target_a) * lam + criterion(output, target_b) * (1. - lam) * alpha2
+            loss = criterion(output, target_a) * (1.0 - 0.5 * alpha2) + criterion(output, target_b) * 0.5 * alpha2
 
             # The code below is for outputting an image.
 
@@ -286,12 +285,12 @@ def train(train_loader, model, criterion, optimizer, epoch):
             #mixImage2 = renormalize(mixImage2)
 
             #for i in range(8):
-                #grid = torch.stack([content[i].cpu().squeeze(0), mixImage[i].cpu().squeeze(0), mixImage2[i].cpu().squeeze(0), style[i].cpu().squeeze(0)], dim = 0)
-                #img_grid = torchvision.utils.make_grid(
-                #[unorm(tensor) for tensor in grid])
-                #grid_name = 'grid_'+str(i)+'.png'
+            #    grid = torch.stack([content[i].cpu().squeeze(0), mixImage[i].cpu().squeeze(0), mixImage2[i].cpu().squeeze(0), style[i].cpu().squeeze(0)], dim = 0)
+            #    img_grid = torchvision.utils.make_grid(
+            #    [unorm(tensor) for tensor in grid])
+            #    grid_name = 'grid_'+str(i)+'.png'
                 #save_image(img_grid, grid_name)
-                #writer.add_image('four_fashion_mnist_images'+str(i), img_grid)
+            #    writer.add_image('four_fashion_mnist_images'+str(i), img_grid)
         else:
             # compute output
             output = model(input)

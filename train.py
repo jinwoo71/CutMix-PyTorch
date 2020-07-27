@@ -75,7 +75,6 @@ parser.add_argument('--cutmix_prob', default=0, type=float,
                     help='cutmix probability')
 parser.add_argument('--vgg', type=str, default='models/vgg_normalised.pth')
 parser.add_argument('--decoder', type=str, default='models/decoder_iter_110300.pth.tar')
-parser.add_argument('--pretrained', type=str, default='models/pretrained.pth.tar')
 parser.set_defaults(bottleneck=True)
 parser.set_defaults(verbose=True)
 
@@ -95,7 +94,7 @@ def main():
     global args, best_err1, best_err5
     args = parser.parse_args()
     print("args")
-    global decoder, vgg, pretrained
+    global decoder, vgg
     decoder = net.decoder
     vgg = net.vgg
     decoder.eval()
@@ -185,11 +184,6 @@ def main():
     else:
         raise Exception('unknown dataset: {}'.format(args.dataset))
 
-    pretrained = RN.ResNet(args.dataset, args.depth, numberofclass, args.bottleneck)
-    print("####")
-    pretrained.load_state_dict(torch.load(args.pretrained)['state_dict'], strict=False)
-    pretrained.cuda()
-
     print("=> creating model '{}'".format(args.net_type))
     if args.net_type == 'resnet':
         model = RN.ResNet(args.dataset, args.depth, numberofclass, args.bottleneck)  # for ResNet
@@ -266,43 +260,30 @@ def train(train_loader, model, criterion, optimizer, epoch):
         target = target.cuda()
         r = np.random.rand(1)
         # Run style_mixup with a probability of 0.5
-        if r < 0.75:
+        if r < 0.5:
             rand_index = torch.randperm(input.size()[0]).cuda()
             content = input
-            style = crop10(style, pretrained, target_b, epoch)
+            style = input[rand_index]
             target_a = target
             target_b = target[rand_index]
 
             # alpha1 and mixImage1 are variables to check if the original image is displayed when alpha is 0.
             #alpha1 = 0.0
             alpha2 = np.random.uniform()
-            #a1 = 0.0
-            #a2 = 0.25
-            #a3 = 0.5
-            #a4 = 0.75
-            #a5 = 1.0
+            beta = np.random.uniform()
             with torch.no_grad():
              #   mixImage = style_transfer(vgg, decoder, content, style, alpha1)
-                mixImage2 = symmetric_style_transfer(vgg, decoder, content, style, alpha2)
-                #m1 = style_transfer2(vgg, decoder, content, style, a1)
-                #m2 = style_transfer2(vgg, decoder, content, style, a2)
-                #m3 = style_transfer2(vgg, decoder, content, style, a3)
-                #m4 = style_transfer2(vgg, decoder, content, style, a4)
-                #m5 = style_transfer2(vgg, decoder, content, style, a5)
+                mixImage2 = style_transfer_no_style(vgg, decoder, content, style, alpha2, beta)
+
+
             output = model(mixImage2)
             # when alpha2 = 0 : loss = criterion(output, target_a)
-            # when alpha2 = 1 : loss = criterion(output, target_b)
-            loss = criterion(output, target_a) * (1.0-alpha2) + criterion(output, target_b) * alpha2
+            # when alpha2 = 1 : loss = 0.5 * criterion(output, target_a) + 0.5 * criterion(output, target_b)
+            loss = criterion(output, target_a) * (1 - alpha2) + criterion(output, target_b) * (alpha2)
 
             # The code below is for outputting an image.
+
             #for i in range(8):
-                #grid = torch.stack([content[i].cpu().squeeze(0),
-                #                    m1[i].cpu().squeeze(0),
-                #                    m2[i].cpu().squeeze(0),
-                #                    m3[i].cpu().squeeze(0),
-                #                    m4[i].cpu().squeeze(0),
-                #                    m5[i].cpu().squeeze(0),
-                #                    style[i].cpu().squeeze(0)], dim = 0)
                 #grid = torch.stack([content[i].cpu().squeeze(0), mixImage[i].cpu().squeeze(0), mixImage2[i].cpu().squeeze(0), style[i].cpu().squeeze(0)], dim = 0)
                 #img_grid = torchvision.utils.make_grid(
                 #[unorm(tensor) for tensor in grid])
@@ -497,24 +478,6 @@ def test_transform(size, crop):
     transform = transforms.Compose(transform_list)
     return transform
 
-def symmetric_style_transfer(vgg, decoder, content, style, alpha=1.0, interpolation_weights=None):
-    assert (0.0 <= alpha <= 1.0)
-    content_f = vgg(content)
-    style_f = vgg(style)
-    if interpolation_weights:
-        _, C, H, W = content_f.size()
-        feat = torch.FloatTensor(1, C, H, W).zero_().to(device)
-        base_feat = adaptive_instance_normalization(content_f, style_f)
-        for i, w in enumerate(interpolation_weights):
-            feat = feat + w * base_feat[i:i + 1]
-        content_f = content_f[0:1]
-    else:
-        feat_content = adaptive_instance_normalization(content_f, style_f)
-        feat_style = adaptive_instance_normalization(style_f, content_f)
-    feat = (1-alpha)*(1-alpha)*content_f + alpha*alpha*style_f + alpha*(1-alpha)*(feat_content + feat_style)
-    return decoder(feat)
-
-
 def style_transfer(vgg, decoder, content, style, alpha=1.0, interpolation_weights=None):
     assert (0.0 <= alpha <= 1.0)
     content_f = vgg(content)
@@ -531,35 +494,35 @@ def style_transfer(vgg, decoder, content, style, alpha=1.0, interpolation_weight
     feat = feat * alpha + content_f * (1 - alpha)
     return decoder(feat)
 
-def crop10(image, model, target, epoch):
-    size = image.shape[2]
-    h = size // 2
-    q = size // 4
-    s = size
-    upsample = nn.Upsample(size=size, mode='bilinear')
-    image_crop = torch.zeros(image.shape[0], 10, image.shape[1], image.shape[2], image.shape[3]).cuda()
-    image_crop[:,0,:,:,:] = upsample(image[:,:,0:h,0:h])
-    image_crop[:,1,:,:,:] = upsample(image[:,:,0:h,h:s])
-    image_crop[:,2,:,:,:] = upsample(image[:,:,h:s,0:h])
-    image_crop[:,3,:,:,:] = upsample(image[:,:,h:s,h:s])
-    image_crop[:,4,:,:,:] = upsample(image[:,:,q:s-q,q:s-q])
-    image_crop[:,5,:,:,:] = upsample(image[:,:,0:s-q,0:s-q])
-    image_crop[:,6,:,:,:] = upsample(image[:,:,0:s-q,q:s])
-    image_crop[:,7,:,:,:] = upsample(image[:,:,q:s,0:s-q])
-    image_crop[:,8,:,:,:] = upsample(image[:,:,q:s,q:s])
-    image_crop[:,9,:,:,:] = image
-    output = model(image_crop.view(-1, image.shape[1], image.shape[2], image.shape[3]))
-    output = nn.Softmax(dim=1)(output)
-    output = output.view(image.shape[0], 10, -1)
-    output2 = output.view(image.shape[0], 10, -1)
-    output = output[torch.arange(image.shape[0]),:,target]
-    maxVal, maxIndex = torch.max(output, 1)
-    cropImage = image_crop[torch.arange(image.shape[0]), maxIndex, :, :, :]
-    #for i in range(20):
-    #    writer.add_image('image'+str(epoch)+str(i), unorm(image[i]))
-    #    writer.add_image('image'+str(epoch)+str(i)+'selected', unorm(cropImage[i]))
-    #    writer.add_scalar('image'+str(epoch)+str(i)+'softmax',maxVal[i])
-    return image_crop[torch.arange(image.shape[0]), maxIndex, :, :, :]
+def rand_bbox2(size, lam):
+    W = size.shape[2]
+    H = size.shape[3]
+    cut_rat = np.sqrt(1. - lam)
+    cut_w = np.int(W * cut_rat)
+    cut_h = np.int(H * cut_rat)
+
+    cut_w = np.clip(cut_w, 0, W-1)
+    cut_h = np.clip(cut_h, 0, H-1)
+    # uniform
+    bbx1 = np.random.randint(W-cut_w)
+    bby1 = np.random.randint(H-cut_h)
+
+    bbx2 = bbx1 + cut_w
+    bby2 = bby1 + cut_h
+
+    return bbx1, bby1, bbx2, bby2
+
+def style_transfer_no_style(vgg, decoder, content, style, alpha, beta):
+    #assert (0.0 <= alpha <= 1.0)
+    content_f = vgg(content)
+    style_f = vgg(style)
+    x1, y1, x2, y2 = rand_bbox2(content_f, 1-alpha)
+    X1, Y1, X2, Y2 = rand_bbox2(content_f, 1-alpha)
+    feat_content = adaptive_instance_normalization(content_f, style_f)
+    feat_style = adaptive_instance_normalization(style_f, content_f)
+    content_f[:,:,x1:x2,y1:y2] = style_f[:,:,X1:X2,Y1:Y2]
+    feat = content_f
+    return decoder(feat)
 
 if __name__ == '__main__':
     main()

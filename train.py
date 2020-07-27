@@ -270,6 +270,7 @@ def train(train_loader, model, criterion, optimizer, epoch):
             # alpha1 and mixImage1 are variables to check if the original image is displayed when alpha is 0.
             #alpha1 = 0.0
             alpha2 = np.random.uniform()
+            beta = np.random.uniform()
             #a1 = 0.0
             #a2 = 0.25
             #a3 = 0.5
@@ -277,7 +278,7 @@ def train(train_loader, model, criterion, optimizer, epoch):
             #a5 = 1.0
             with torch.no_grad():
              #   mixImage = style_transfer(vgg, decoder, content, style, alpha1)
-                mixImage2 = symmetric_style_transfer(vgg, decoder, content, style, alpha2)
+                mixImage2 = symmetric_style_transfer_v2(vgg, decoder, content, style, alpha2, beta)
                 #m1 = style_transfer2(vgg, decoder, content, style, a1)
                 #m2 = style_transfer2(vgg, decoder, content, style, a2)
                 #m3 = style_transfer2(vgg, decoder, content, style, a3)
@@ -290,7 +291,7 @@ def train(train_loader, model, criterion, optimizer, epoch):
             loss = criterion(output, target_a) * (1.0-alpha2) + criterion(output, target_b) * alpha2
 
             # The code below is for outputting an image.
-            #for i in range(8):
+                #for i in range(8):
                 #grid = torch.stack([content[i].cpu().squeeze(0),
                 #                    m1[i].cpu().squeeze(0),
                 #                    m2[i].cpu().squeeze(0),
@@ -492,23 +493,15 @@ def test_transform(size, crop):
     transform = transforms.Compose(transform_list)
     return transform
 
-def symmetric_style_transfer(vgg, decoder, content, style, alpha=1.0, interpolation_weights=None):
+def symmetric_style_transfer_v2(vgg, decoder, content, style, alpha, beta):
     assert (0.0 <= alpha <= 1.0)
     content_f = vgg(content)
     style_f = vgg(style)
-    if interpolation_weights:
-        _, C, H, W = content_f.size()
-        feat = torch.FloatTensor(1, C, H, W).zero_().to(device)
-        base_feat = adaptive_instance_normalization(content_f, style_f)
-        for i, w in enumerate(interpolation_weights):
-            feat = feat + w * base_feat[i:i + 1]
-        content_f = content_f[0:1]
-    else:
-        feat_content = adaptive_instance_normalization(content_f, style_f)
-        feat_style = adaptive_instance_normalization(style_f, content_f)
-    feat = (1-alpha)*(1-alpha)*content_f + alpha*alpha*style_f + alpha*(1-alpha)*(feat_content + feat_style)
-    return decoder(feat)
+    feat_content = adaptive_instance_normalization(content_f, style_f)
+    feat_style = adaptive_instance_normalization(style_f, content_f)
 
+    feat = beta * (1-alpha) * content_f + beta * alpha * style_f + (1-beta) * (1-alpha) * feat_content + (1-beta) * alpha * feat_style
+    return decoder(feat)
 
 def style_transfer(vgg, decoder, content, style, alpha=1.0, interpolation_weights=None):
     assert (0.0 <= alpha <= 1.0)

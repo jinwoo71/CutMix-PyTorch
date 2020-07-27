@@ -74,7 +74,7 @@ parser.add_argument('--beta', default=0, type=float,
 parser.add_argument('--cutmix_prob', default=0, type=float,
                     help='cutmix probability')
 parser.add_argument('--vgg', type=str, default='models/vgg_normalised.pth')
-parser.add_argument('--decoder', type=str, default='models/decoder_iter_75200.pth.tar')
+parser.add_argument('--decoder', type=str, default='models/decoder_iter_110300.pth.tar')
 parser.set_defaults(bottleneck=True)
 parser.set_defaults(verbose=True)
 
@@ -140,8 +140,8 @@ def main():
             raise Exception('unknown dataset: {}'.format(args.dataset))
 
     elif args.dataset == 'imagenet':
-        traindir = os.path.join('/home_goya/jinwoo.choi/ImageNet/100000/')
-        valdir = os.path.join('/home_goya/jinwoo.choi/ImageNet/temp_val/')
+        traindir = os.path.join('/home_goya/jinwoo.choi/ImageNet/train_100Class_500Each/')
+        valdir = os.path.join('/home_goya/jinwoo.choi/ImageNet/val_100Class_50Each/')
         normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                          std=[0.229, 0.224, 0.225])
 
@@ -179,7 +179,7 @@ def main():
             ])),
             batch_size=args.batch_size, shuffle=False,
             num_workers=args.workers, pin_memory=True)
-        numberofclass = 1000
+        numberofclass = 100
 
     else:
         raise Exception('unknown dataset: {}'.format(args.dataset))
@@ -217,6 +217,10 @@ def main():
         # evaluate on validation set
         err1, err5, val_loss = validate(val_loader, model, criterion, epoch)
 
+        writer.add_scalar('train_loss', train_loss, epoch+1)
+        writer.add_scalar('val_loss', val_loss, epoch+1)
+        writer.add_scalar('err1', err1, epoch+1)
+        writer.add_scalar('err5', err5, epoch+1)
         # remember best prec@1 and save checkpoint
         is_best = err1 <= best_err1
         best_err1 = min(err1, best_err1)
@@ -268,7 +272,7 @@ def train(train_loader, model, criterion, optimizer, epoch):
             alpha2 = np.random.uniform()
 
             with torch.no_grad():
-            #    mixImage = style_transfer(vgg, decoder, content, style, alpha1)
+             #   mixImage = style_transfer(vgg, decoder, content, style, alpha1)
                 mixImage2 = style_transfer(vgg, decoder, content, style, alpha2)
 
 
@@ -279,18 +283,13 @@ def train(train_loader, model, criterion, optimizer, epoch):
 
             # The code below is for outputting an image.
 
-            #content = renormalize(content)
-            #style = renormalize(style)
-            #mixImage = renormalize(mixImage)
-            #mixImage2 = renormalize(mixImage2)
-
             #for i in range(8):
-            #    grid = torch.stack([content[i].cpu().squeeze(0), mixImage[i].cpu().squeeze(0), mixImage2[i].cpu().squeeze(0), style[i].cpu().squeeze(0)], dim = 0)
-            #    img_grid = torchvision.utils.make_grid(
-            #    [unorm(tensor) for tensor in grid])
-            #    grid_name = 'grid_'+str(i)+'.png'
+                #grid = torch.stack([content[i].cpu().squeeze(0), mixImage[i].cpu().squeeze(0), mixImage2[i].cpu().squeeze(0), style[i].cpu().squeeze(0)], dim = 0)
+                #img_grid = torchvision.utils.make_grid(
+                #[unorm(tensor) for tensor in grid])
+                #grid_name = 'grid_'+str(i)+'.png'
                 #save_image(img_grid, grid_name)
-            #    writer.add_image('four_fashion_mnist_images'+str(i), img_grid)
+                #writer.add_image('four_fashion_mnist_images'+str(i), img_grid)
         else:
             # compute output
             output = model(input)
@@ -302,7 +301,6 @@ def train(train_loader, model, criterion, optimizer, epoch):
         losses.update(loss.item(), input.size(0))
         top1.update(err1.item(), input.size(0))
         top5.update(err5.item(), input.size(0))
-
         # compute gradient and do SGD step
         optimizer.zero_grad()
         loss.backward()
@@ -396,8 +394,10 @@ def save_checkpoint(state, is_best, filename='checkpoint.pth.tar'):
         os.makedirs(directory)
     filename = directory + filename
     torch.save(state, filename)
+
     if is_best:
         shutil.copyfile(filename, 'runs/%s/' % (args.expname) + 'model_best.pth.tar')
+
 
 
 class AverageMeter(object):

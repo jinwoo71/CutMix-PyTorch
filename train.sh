@@ -3,9 +3,9 @@ python train.py \
     --dataset imagenet \
     --batch_size 256 \
     --lr 0.1 \
-    --depth 50 \
+    --depth 18 \
     --epochs 300 \
-    --expname ResNet50 \
+    --expname ResNet18 \
     -j 40 \
     --beta 1.0 \
     --cutmix_prob 1.0 \

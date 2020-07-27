@@ -204,9 +204,9 @@ def main():
     # I recommend 'commenting out' the code below,
     # if you are not using function 'crop10' (for memory)
     ###########################################
-    #pretrained = RN.ResNet(args.dataset, args.depth, numberofclass, args.bottleneck)
-    #pretrained.load_state_dict(torch.load(args.pretrained)['state_dict'], strict=False)
-    #pretrained.cuda()
+    pretrained = RN.ResNet(args.dataset, args.depth, numberofclass, args.bottleneck)
+    pretrained.load_state_dict(torch.load(args.pretrained)['state_dict'], strict=False)
+    pretrained.cuda()
     ###########################################
     print("=> creating model '{}'".format(args.net_type))
     if args.net_type == 'resnet':
@@ -288,6 +288,7 @@ def train(train_loader, model, criterion, optimizer, epoch):
             rand_index = torch.randperm(input.size()[0]).cuda()
             content = input
             style = input[rand_index]
+            mixImage = None
             target_a = target
             target_b = target[rand_index]
             ########################################
@@ -341,48 +342,97 @@ def train(train_loader, model, criterion, optimizer, epoch):
                 alpha = np.random.uniform()
                 style = crop10(style, pretrained, target_b, epoch)
                 with torch.no_grad():
-                    mixImage = symmetric_style_transfer(vgg, decoder, content, style, alpha)
+                    mixImage = symmetric_style_transfer(vgg, decoder, content, style, 0.5)#alpha)
                 output = model(mixImage)
                 # when alpha = 0 : loss = criterion(output, target_a)
                 # when alpha = 1 : loss = criterion(output, target_b)
                 loss = criterion(output, target_a) * (1.0 - alpha) + criterion(output, target_b) * alpha
             elif args.method == 'cutmix_no_style' :
                 print("cutmix_no_style")
+                lam = 0.5#np.random.beta(1.0, 1.0)
+                # lam = retio of area
+                # lam = 0 : 0% A image, 100% B image
+                # lam = 1 : 100% A image, 0% B image
+                bbx1, bby1, bbx2, bby2 = rand_bbox(input.size(), lam)
+                with torch.no_grad():
+                    mixImage = style_transfer_no_style(vgg, decoder, content, style, bbx1, bby1, bbx2, bby2)
+                # adjust lambda to exactly match pixel ratio
+                lam = 1 - ((bbx2 - bbx1) * (bby2 - bby1) / (input.size()[-1] * input.size()[-2]))
+                # compute output
+                output = model(mixImage)
+                loss = (lam) * criterion(output, target_a) + (1 - lam) * criterion(output, target_b)
+                print("front")
+                print(loss)
+                print(mixImage)
+            elif args.method == 'cutmix_style' :
+                # cutmix in feature map
+                print("cutmix_style")
                 lam = np.random.beta(1.0, 1.0)
+                alpha = np.random.uniform()
                 # lam = retio of area
                 # lam = 0 : 0% A image, 100% B image
                 # lam = 1 : 100% A image, 0% B image
                 with torch.no_grad():
-                    mixImage = style_transfer(vgg, decoder, content, style, 0.0)
+                    mixImage = style_transfer(vgg, decoder, content, style, alpha)
                 bbx1, bby1, bbx2, bby2 = rand_bbox(input.size(), lam)
-                input[:, :, bbx1:bbx2, bby1:bby2] = input[rand_index, :, bbx1:bbx2, bby1:bby2]
+                input[:, :, bbx1:bbx2, bby1:bby2] = mixImage[:, :, bbx1:bbx2, bby1:bby2]
                 # adjust lambda to exactly match pixel ratio
                 lam = 1 - ((bbx2 - bbx1) * (bby2 - bby1) / (input.size()[-1] * input.size()[-2]))
                 # compute output
                 output = model(input)
-                loss = criterion(output, target_a) * lam + criterion(output, target_b) * (1. - lam)
-                # when lam = 0 : loss = criterion(output, target_b)
-                # when lam = 1 : loss = criterion(output, target_a)
-            elif args.method == 'cutmix_with_styled_patch' :
-                print("cutmix_with_styled_patch")
+                # when lam = 0, alpha = 0 : loss = criterion(output, target_a)
+                # when lam = 0, alpha = 1 : loss = 0.5 * criterion(output, target_a) + 0.5 * criterion(output, target_b)
+                # when lam = 1, alpha = 0 : loss = criterion(output, target_a)
+                # when lam = 1, alpha = 1 : loss = criterion(output, target_a)
+                loss = criterion(output, target_a) * (1.0 - 0.5 * (1 - lam) * alpha) + criterion(output, target_b) * (0.5 * (1 - lam) * alpha)
+            elif args.method == 'cutmix_symmetric_style' :
+                print("cutmix_symmetric_style")
                 lam = np.random.beta(1.0, 1.0)
                 alpha = np.random.uniform()
+                # lam = retio of area
+                # lam = 0 : 0% A image, 100% B image
+                # lam = 1 : 100% A image, 0% B image
                 with torch.no_grad():
-                    lam, mixImage = style_transfer_only_in_patch(vgg, decoder, content, style, lam, alpha)
-                output = model(mixImage)
-                # when alpha = 0 : loss = criterion(output, target_a)
-                # when alpha = 1 : loss = criterion(output, target_b)
-                loss = criterion(output, target_a) * (1.0 - 0.5 * lam * alpha) + criterion(output, target_b) * (0.5 * lam * alpha)
+                    mixImage = symmetric_style_transfer(vgg, decoder, content, style, alpha)
+                bbx1, bby1, bbx2, bby2 = rand_bbox(input.size(), lam)
+                input[:, :, bbx1:bbx2, bby1:bby2] = mixImage[:, :, bbx1:bbx2, bby1:bby2]
+                # adjust lambda to exactly match pixel ratio
+                lam = 1 - ((bbx2 - bbx1) * (bby2 - bby1) / (input.size()[-1] * input.size()[-2]))
+                # compute output
+                output = model(input)
+                # when lam = 0 : loss = (1 - alpha) * criterion(output, target_a) + (alpha) * criterion(output, target_b)
+                # when lam = 1 : loss = criterion(output, tartget_a)
+                loss = criterion(output, target_a) * (1 - alpha + alpha * lam) + criterion(output, target_b) * (1. - lam) * alpha
+            elif args.method == 'cutmix_symmetric_style_v2' :
+                print("cutmix_symmetric_style_v2")
+                lam = np.random.beta(1.0, 1.0)
+                alpha = np.random.uniform()
+                beta = np.random.uniform()
+                # lam = retio of area
+                # lam = 0 : 0% A image, 100% B image
+                # lam = 1 : 100% A image, 0% B image
+                with torch.no_grad():
+                    mixImage = symmetric_style_transfer_v2(vgg, decoder, content, style, alpha, beta)
+                bbx1, bby1, bbx2, bby2 = rand_bbox(input.size(), lam)
+                input[:, :, bbx1:bbx2, bby1:bby2] = mixImage[:, :, bbx1:bbx2, bby1:bby2]
+                # adjust lambda to exactly match pixel ratio
+                lam = 1 - ((bbx2 - bbx1) * (bby2 - bby1) / (input.size()[-1] * input.size()[-2]))
+                # compute output
+                output = model(input)
+                # when lam = 0 : loss = (1 - alpha) * criterion(output, target_a) + (alpha) * criterion(output, target_b)
+                # when lam = 1 : loss = criterion(output, tartget_a)
+                loss = criterion(output, target_a) * (1 - alpha + alpha * lam) + criterion(output, target_b) * (1. - lam) * alpha
+            else :
+                None
 
             # The code below is for outputting an image.
-
-            #for i in range(8):
-                #grid = torch.stack([content[i].cpu().squeeze(0), mixImage[i].cpu().squeeze(0), mixImage2[i].cpu().squeeze(0), style[i].cpu().squeeze(0)], dim = 0)
-                #img_grid = torchvision.utils.make_grid(
-                #[unorm(tensor) for tensor in grid])
+            #for i in range(40):
+            #    grid = torch.stack([content[i].cpu().squeeze(0), mixImage[i].cpu().squeeze(0), style[i].cpu().squeeze(0)], dim = 0)
+            #    img_grid = torchvision.utils.make_grid(
+            #    [unorm(tensor) for tensor in grid])
                 #grid_name = 'grid_'+str(i)+'.png'
                 #save_image(img_grid, grid_name)
-                #writer.add_image('four_fashion_mnist_images'+str(i), img_grid)
+            #    writer.add_image('four_fashion_mnist_images'+str(i), img_grid)
         else:
             # compute output
             output = model(input)
@@ -596,26 +646,13 @@ def symmetric_style_transfer_v2(vgg, decoder, content, style, alpha, beta):
     feat = beta * (1-alpha) * content_f + beta * alpha * style_f + (1-beta) * (1-alpha) * adain_content_style + (1-beta) * alpha * adain_style_content
     return decoder(feat)
 
-def style_transfer_no_style(vgg, decoder, content, style, alpha, beta):
+def style_transfer_no_style(vgg, decoder, content, style, bbx1, bby1, bbx2, bby2):
     #assert (0.0 <= alpha <= 1.0)
     content_f = vgg(content)
     style_f = vgg(style)
-    x1, y1, x2, y2 = rand_bbox2(content_f, 1-alpha)
-    X1, Y1, X2, Y2 = rand_bbox2(content_f, 1-alpha)
-    content_f[:,:,x1:x2,y1:y2] = style_f[:,:,X1:X2,Y1:Y2]
+    content_f[:,:,bbx1:bbx2,bby1:bby2] = style_f[:,:,bbx1:bbx2,bby1:bby2]
     feat = content_f
     return decoder(feat)
-
-def style_transfer_only_in_patch(vgg, decoder, content, style, lam, alpha):
-    #assert (0.0 <= alpha <= 1.0)
-    content_f = vgg(content)
-    style_f = vgg(style)
-    x1, y1, x2, y2 = rand_bbox(content_f.size(), 1-alpha)
-    lam = 1 - ((x2-x1)*(y2-y1) / (content_f.size()[-1] * content_f.size()[-2]))
-    adain_content_style = adaptive_instance_normalization(content_f, style_f)
-    content_with_style = adain_content_style * alpha + content_f * (1 - alpha)
-    content_f[:,:,x1:x2,y1:y2] = content_with_style[:,:,x1:x2,y1:y2]
-    return lam, decoder(content_f)
 
 def crop10(image, model, target, epoch):
     size = image.shape[2]

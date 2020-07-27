@@ -75,6 +75,8 @@ parser.add_argument('--cutmix_prob', default=0, type=float,
                     help='cutmix probability')
 parser.add_argument('--vgg', type=str, default='models/vgg_normalised.pth')
 parser.add_argument('--decoder', type=str, default='models/decoder_iter_110300.pth.tar')
+parser.add_argument('--pretrained', type=str, default='models/pretrained.pth.tar')
+
 parser.set_defaults(bottleneck=True)
 parser.set_defaults(verbose=True)
 
@@ -94,7 +96,7 @@ def main():
     global args, best_err1, best_err5
     args = parser.parse_args()
     print("args")
-    global decoder, vgg
+    global decoder, vgg, pretrained
     decoder = net.decoder
     vgg = net.vgg
     decoder.eval()
@@ -104,7 +106,6 @@ def main():
     vgg = nn.Sequential(*list(vgg.children())[:31])
     vgg.cuda()
     decoder.cuda()
-
     if args.dataset.startswith('cifar'):
         normalize = transforms.Normalize(mean=[x / 255.0 for x in [125.3, 123.0, 113.9]],
                                          std=[x / 255.0 for x in [63.0, 62.1, 66.7]])
@@ -184,6 +185,12 @@ def main():
     else:
         raise Exception('unknown dataset: {}'.format(args.dataset))
 
+    pretrained = RN.ResNet(args.dataset, args.depth, numberofclass, args.bottleneck)
+    print("####")
+    pretrained.load_state_dict(torch.load(args.pretrained)['state_dict'], strict=False)
+    pretrained.cuda()
+
+
     print("=> creating model '{}'".format(args.net_type))
     if args.net_type == 'resnet':
         model = RN.ResNet(args.dataset, args.depth, numberofclass, args.bottleneck)  # for ResNet
@@ -228,7 +235,7 @@ def main():
             best_err5 = err5
 
         print('Current best accuracy (top-1 and 5 error):', best_err1, best_err5)
-        save_checkpoint({
+        ({
             'epoch': epoch,
             'arch': args.net_type,
             'state_dict': model.state_dict(),
@@ -258,21 +265,22 @@ def train(train_loader, model, criterion, optimizer, epoch):
 
         input = input.cuda()
         target = target.cuda()
-        r = np.random.rand(1)
+        r = np.random.uniform()
         # Run style_mixup with a probability of 0.5
         if r < 0.5:
             rand_index = torch.randperm(input.size()[0]).cuda()
             content = input
-            style = input[rand_index]
+            style = crop10(style, pretrained, target_b, epoch)
+            #style = input[rand_index]
             target_a = target
             target_b = target[rand_index]
 
             # alpha1 and mixImage1 are variables to check if the original image is displayed when alpha is 0.
             #alpha1 = 0.0
-            alpha2 = np.random.uniform()
+            alpha2 = np.random.beta(0.7, 0.7)#np.random.uniform()
 
             with torch.no_grad():
-             #   mixImage = style_transfer(vgg, decoder, content, style, alpha1)
+                #mixImage = style_transfer(vgg, decoder, content, style, alpha1)
                 mixImage2 = style_transfer(vgg, decoder, content, style, alpha2)
 
 
@@ -282,14 +290,13 @@ def train(train_loader, model, criterion, optimizer, epoch):
             loss = criterion(output, target_a) * (1.0 - 0.5 * alpha2) + criterion(output, target_b) * 0.5 * alpha2
 
             # The code below is for outputting an image.
-
             #for i in range(8):
-                #grid = torch.stack([content[i].cpu().squeeze(0), mixImage[i].cpu().squeeze(0), mixImage2[i].cpu().squeeze(0), style[i].cpu().squeeze(0)], dim = 0)
-                #img_grid = torchvision.utils.make_grid(
-                #[unorm(tensor) for tensor in grid])
+            #    grid = torch.stack([content[i].cpu().squeeze(0), mixImage[i].cpu().squeeze(0), mixImage2[i].cpu().squeeze(0), style[i].cpu().squeeze(0)], dim = 0)
+            #    img_grid = torchvision.utils.make_grid(
+            #    [unorm(tensor) for tensor in grid])
                 #grid_name = 'grid_'+str(i)+'.png'
                 #save_image(img_grid, grid_name)
-                #writer.add_image('four_fashion_mnist_images'+str(i), img_grid)
+            #    writer.add_image('four_fashion_mnist_images'+str(epoch)+str(i), img_grid)
         else:
             # compute output
             output = model(input)
@@ -394,10 +401,8 @@ def save_checkpoint(state, is_best, filename='checkpoint.pth.tar'):
         os.makedirs(directory)
     filename = directory + filename
     torch.save(state, filename)
-
     if is_best:
         shutil.copyfile(filename, 'runs/%s/' % (args.expname) + 'model_best.pth.tar')
-
 
 
 class AverageMeter(object):
@@ -493,6 +498,36 @@ def style_transfer(vgg, decoder, content, style, alpha=1.0, interpolation_weight
         feat = adaptive_instance_normalization(content_f, style_f)
     feat = feat * alpha + content_f * (1 - alpha)
     return decoder(feat)
+
+def crop10(image, model, target, epoch):
+    size = image.shape[2]
+    h = size // 2
+    q = size // 4
+    s = size
+    upsample = nn.Upsample(size=size, mode='bilinear')
+    image_crop = torch.zeros(image.shape[0], 10, image.shape[1], image.shape[2], image.shape[3]).cuda()
+    image_crop[:,0,:,:,:] = upsample(image[:,:,0:h,0:h])
+    image_crop[:,1,:,:,:] = upsample(image[:,:,0:h,h:s])
+    image_crop[:,2,:,:,:] = upsample(image[:,:,h:s,0:h])
+    image_crop[:,3,:,:,:] = upsample(image[:,:,h:s,h:s])
+    image_crop[:,4,:,:,:] = upsample(image[:,:,q:s-q,q:s-q])
+    image_crop[:,5,:,:,:] = upsample(image[:,:,0:s-q,0:s-q])
+    image_crop[:,6,:,:,:] = upsample(image[:,:,0:s-q,q:s])
+    image_crop[:,7,:,:,:] = upsample(image[:,:,q:s,0:s-q])
+    image_crop[:,8,:,:,:] = upsample(image[:,:,q:s,q:s])
+    image_crop[:,9,:,:,:] = image
+    output = model(image_crop.view(-1, image.shape[1], image.shape[2], image.shape[3]))
+    output = nn.Softmax(dim=1)(output)
+    output = output.view(image.shape[0], 10, -1)
+    output2 = output.view(image.shape[0], 10, -1)
+    output = output[torch.arange(image.shape[0]),:,target]
+    maxVal, maxIndex = torch.max(output, 1)
+    cropImage = image_crop[torch.arange(image.shape[0]), maxIndex, :, :, :]
+    #for i in range(20):
+    #    writer.add_image('image'+str(epoch)+str(i), unorm(image[i]))
+    #    writer.add_image('image'+str(epoch)+str(i)+'selected', unorm(cropImage[i]))
+    #    writer.add_scalar('image'+str(epoch)+str(i)+'softmax',maxVal[i])
+    return image_crop[torch.arange(image.shape[0]), maxIndex, :, :, :]
 
 if __name__ == '__main__':
     main()

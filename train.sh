@@ -1,7 +1,7 @@
 python train.py \
     --net_type resnet \
     --dataset imagenet \
-    --batch_size 256 \
+    --batch_size 64 \
     --lr 0.1 \
     --depth 18 \
     --epochs 300 \
@@ -9,4 +9,5 @@ python train.py \
     -j 40 \
     --beta 1.0 \
     --cutmix_prob 1.0 \
+    --method cutmix_with_styled_patch \
     --no-verbose

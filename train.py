@@ -75,6 +75,12 @@ parser.add_argument('--cutmix_prob', default=0, type=float,
                     help='cutmix probability')
 parser.add_argument('--vgg', type=str, default='models/vgg_normalised.pth')
 parser.add_argument('--decoder', type=str, default='models/decoder_iter_110300.pth.tar')
+#####################################
+# Check here before running the code!
+# Enter the appropriate method and pretrained model
+#####################################
+parser.add_argument('--method', type=str, default='style_mixup')
+parser.add_argument('--pretrained', type=str, default='models/pretrained_100Class.pth.tar')
 parser.set_defaults(bottleneck=True)
 parser.set_defaults(verbose=True)
 
@@ -94,7 +100,7 @@ def main():
     global args, best_err1, best_err5
     args = parser.parse_args()
     print("args")
-    global decoder, vgg
+    global decoder, vgg, pretrained
     decoder = net.decoder
     vgg = net.vgg
     decoder.eval()
@@ -140,6 +146,10 @@ def main():
             raise Exception('unknown dataset: {}'.format(args.dataset))
 
     elif args.dataset == 'imagenet':
+        ##############################################
+        # Check here before running the code!
+        # You need to check appropriate dataset
+        ##############################################
         traindir = os.path.join('/home_goya/jinwoo.choi/ImageNet/train_100Class_500Each/')
         valdir = os.path.join('/home_goya/jinwoo.choi/ImageNet/val_100Class_50Each/')
         normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
@@ -179,11 +189,25 @@ def main():
             ])),
             batch_size=args.batch_size, shuffle=False,
             num_workers=args.workers, pin_memory=True)
+        ############################################
+        # Check here before running the code!
+        # You need to check numberofclass
+        ############################################
         numberofclass = 100
 
     else:
         raise Exception('unknown dataset: {}'.format(args.dataset))
 
+    ###########################################
+    # Check here before running the code!
+    # There should be a model pretrained with the appropriate number of classes.
+    # I recommend 'commenting out' the code below,
+    # if you are not using function 'crop10' (for memory)
+    ###########################################
+    #pretrained = RN.ResNet(args.dataset, args.depth, numberofclass, args.bottleneck)
+    #pretrained.load_state_dict(torch.load(args.pretrained)['state_dict'], strict=False)
+    #pretrained.cuda()
+    ###########################################
     print("=> creating model '{}'".format(args.net_type))
     if args.net_type == 'resnet':
         model = RN.ResNet(args.dataset, args.depth, numberofclass, args.bottleneck)  # for ResNet
@@ -266,20 +290,89 @@ def train(train_loader, model, criterion, optimizer, epoch):
             style = input[rand_index]
             target_a = target
             target_b = target[rand_index]
-
-            # alpha1 and mixImage1 are variables to check if the original image is displayed when alpha is 0.
-            #alpha1 = 0.0
-            alpha2 = np.random.uniform()
-
-            with torch.no_grad():
-             #   mixImage = style_transfer(vgg, decoder, content, style, alpha1)
-                mixImage2 = style_transfer(vgg, decoder, content, style, alpha2)
-
-
-            output = model(mixImage2)
-            # when alpha2 = 0 : loss = criterion(output, target_a)
-            # when alpha2 = 1 : loss = 0.5 * criterion(output, target_a) + 0.5 * criterion(output, target_b)
-            loss = criterion(output, target_a) * (1.0 - 0.5 * alpha2) + criterion(output, target_b) * 0.5 * alpha2
+            ########################################
+            # Check here before running the code!
+            # You need to enter the appropriate method in train.sh.
+            ########################################
+            if args.method == 'style_mixup' :
+                print("style_mixup")
+                alpha = np.random.uniform()
+                with torch.no_grad():
+                    mixImage = style_transfer(vgg, decoder, content, style, alpha)
+                output = model(mixImage)
+                # when alpha = 0 : loss = criterion(output, target_a)
+                # when alpha = 1 : loss = 0.5 * criterion(output, target_a) + 0.5 * criterion(output, target_b)
+                loss = criterion(output, target_a) * (1.0 - 0.5 * alpha) + criterion(output, target_b) * 0.5 * alpha
+            elif args.method == 'symmetric_style_mixup' :
+                print("symmetric_style_mixup")
+                alpha = np.random.uniform()
+                with torch.no_grad():
+                    mixImage = symmetric_style_transfer(vgg, decoder, content, style, alpha)
+                output = model(mixImage)
+                # when alpha = 0 : loss = criterion(output, target_a)
+                # when alpha = 1 : loss = criterion(output, target_b)
+                loss = criterion(output, target_a) * (1.0 - alpha) + criterion(output, target_b) * alpha
+            elif args.method == 'symmetric_style_mixup_v2' :
+                print("symmetric_style_mixup_v2")
+                # beta is a parameter that controls the style
+                # when beta = 0 : high style transfer
+                # when beta = 1 : low style transfer
+                alpha = np.random.uniform()
+                beta = np.random.uniform()
+                with torch.no_grad():
+                    mixImage = symmetric_style_transfer_v2(vgg, decoder, content, style, alpha, beta)
+                output = model(mixImage)
+                # when alpha = 0 : loss = criterion(output, target_a)
+                # when alpha = 1 : loss = criterion(output, target_b)
+                loss = criterion(output, target_a) * (1.0 - alpha) + criterion(output, target_b) * alpha
+            elif args.method == 'crop10_beta0.7_symmetric' :
+                print("crop10_beta0.7_symmetric")
+                # alpha follows the beta distribution.
+                alpha = np.random.beta(0.7, 0.7)
+                style = crop10(style, pretrained, target_b, epoch)
+                with torch.no_grad():
+                    mixImage = symmetric_style_transfer(vgg, decoder, content, style, alpha)
+                output = model(mixImage)
+                # when alpha = 0 : loss = criterion(output, target_a)
+                # when alpha = 1 : loss = criterion(output, target_b)
+                loss = criterion(output, target_a) * (1.0 - 0.5 * alpha) + criterion(output, target_b) * 0.5 * alpha
+            elif args.method == 'crop10_symmetric' :
+                print("crop10_symmetric")
+                alpha = np.random.uniform()
+                style = crop10(style, pretrained, target_b, epoch)
+                with torch.no_grad():
+                    mixImage = symmetric_style_transfer(vgg, decoder, content, style, alpha)
+                output = model(mixImage)
+                # when alpha = 0 : loss = criterion(output, target_a)
+                # when alpha = 1 : loss = criterion(output, target_b)
+                loss = criterion(output, target_a) * (1.0 - alpha) + criterion(output, target_b) * alpha
+            elif args.method == 'cutmix_no_style' :
+                print("cutmix_no_style")
+                lam = np.random.beta(1.0, 1.0)
+                # lam = retio of area
+                # lam = 0 : 0% A image, 100% B image
+                # lam = 1 : 100% A image, 0% B image
+                with torch.no_grad():
+                    mixImage = style_transfer(vgg, decoder, content, style, 0.0)
+                bbx1, bby1, bbx2, bby2 = rand_bbox(input.size(), lam)
+                input[:, :, bbx1:bbx2, bby1:bby2] = input[rand_index, :, bbx1:bbx2, bby1:bby2]
+                # adjust lambda to exactly match pixel ratio
+                lam = 1 - ((bbx2 - bbx1) * (bby2 - bby1) / (input.size()[-1] * input.size()[-2]))
+                # compute output
+                output = model(input)
+                loss = criterion(output, target_a) * lam + criterion(output, target_b) * (1. - lam)
+                # when lam = 0 : loss = criterion(output, target_b)
+                # when lam = 1 : loss = criterion(output, target_a)
+            elif args.method == 'cutmix_with_styled_patch' :
+                print("cutmix_with_styled_patch")
+                lam = np.random.beta(1.0, 1.0)
+                alpha = np.random.uniform()
+                with torch.no_grad():
+                    lam, mixImage = style_transfer_only_in_patch(vgg, decoder, content, style, lam, alpha)
+                output = model(mixImage)
+                # when alpha = 0 : loss = criterion(output, target_a)
+                # when alpha = 1 : loss = criterion(output, target_b)
+                loss = criterion(output, target_a) * (1.0 - 0.5 * lam * alpha) + criterion(output, target_b) * (0.5 * lam * alpha)
 
             # The code below is for outputting an image.
 
@@ -294,7 +387,6 @@ def train(train_loader, model, criterion, optimizer, epoch):
             # compute output
             output = model(input)
             loss = criterion(output, target)
-
         # measure accuracy and record loss
         err1, err5 = accuracy(output.data, target, topk=(1, 5))
 
@@ -478,21 +570,101 @@ def test_transform(size, crop):
     transform = transforms.Compose(transform_list)
     return transform
 
-def style_transfer(vgg, decoder, content, style, alpha=1.0, interpolation_weights=None):
+def style_transfer(vgg, decoder, content, style, alpha):
     assert (0.0 <= alpha <= 1.0)
     content_f = vgg(content)
     style_f = vgg(style)
-    if interpolation_weights:
-        _, C, H, W = content_f.size()
-        feat = torch.FloatTensor(1, C, H, W).zero_().to(device)
-        base_feat = adaptive_instance_normalization(content_f, style_f)
-        for i, w in enumerate(interpolation_weights):
-            feat = feat + w * base_feat[i:i + 1]
-        content_f = content_f[0:1]
-    else:
-        feat = adaptive_instance_normalization(content_f, style_f)
-    feat = feat * alpha + content_f * (1 - alpha)
+    adain_content_style = adaptive_instance_normalization(content_f, style_f)
+    feat = adain_content_style * alpha + content_f * (1 - alpha)
     return decoder(feat)
+
+def symmetric_style_transfer(vgg, decoder, content, style, alpha):
+    assert (0.0 <= alpha <= 1.0)
+    content_f = vgg(content)
+    style_f = vgg(style)
+    adain_content_style = adaptive_instance_normalization(content_f, style_f)
+    adain_style_content = adaptive_instance_normalization(style_f, content_f)
+    feat = (1-alpha)*(1-alpha)*content_f + alpha*alpha*style_f + alpha*(1-alpha)*(adain_content_style + adain_style_content)
+    return decoder(feat)
+
+def symmetric_style_transfer_v2(vgg, decoder, content, style, alpha, beta):
+    assert (0.0 <= alpha <= 1.0)
+    content_f = vgg(content)
+    style_f = vgg(style)
+    adain_content_style = adaptive_instance_normalization(content_f, style_f)
+    adain_style_content = adaptive_instance_normalization(style_f, content_f)
+    feat = beta * (1-alpha) * content_f + beta * alpha * style_f + (1-beta) * (1-alpha) * adain_content_style + (1-beta) * alpha * adain_style_content
+    return decoder(feat)
+
+def style_transfer_no_style(vgg, decoder, content, style, alpha, beta):
+    #assert (0.0 <= alpha <= 1.0)
+    content_f = vgg(content)
+    style_f = vgg(style)
+    x1, y1, x2, y2 = rand_bbox2(content_f, 1-alpha)
+    X1, Y1, X2, Y2 = rand_bbox2(content_f, 1-alpha)
+    content_f[:,:,x1:x2,y1:y2] = style_f[:,:,X1:X2,Y1:Y2]
+    feat = content_f
+    return decoder(feat)
+
+def style_transfer_only_in_patch(vgg, decoder, content, style, lam, alpha):
+    #assert (0.0 <= alpha <= 1.0)
+    content_f = vgg(content)
+    style_f = vgg(style)
+    x1, y1, x2, y2 = rand_bbox(content_f.size(), 1-alpha)
+    lam = 1 - ((x2-x1)*(y2-y1) / (content_f.size()[-1] * content_f.size()[-2]))
+    adain_content_style = adaptive_instance_normalization(content_f, style_f)
+    content_with_style = adain_content_style * alpha + content_f * (1 - alpha)
+    content_f[:,:,x1:x2,y1:y2] = content_with_style[:,:,x1:x2,y1:y2]
+    return lam, decoder(content_f)
+
+def crop10(image, model, target, epoch):
+    size = image.shape[2]
+    h = size // 2
+    q = size // 4
+    s = size
+    upsample = nn.Upsample(size=size, mode='bilinear')
+    image_crop = torch.zeros(image.shape[0], 10, image.shape[1], image.shape[2], image.shape[3]).cuda()
+    image_crop[:,0,:,:,:] = upsample(image[:,:,0:h,0:h])
+    image_crop[:,1,:,:,:] = upsample(image[:,:,0:h,h:s])
+    image_crop[:,2,:,:,:] = upsample(image[:,:,h:s,0:h])
+    image_crop[:,3,:,:,:] = upsample(image[:,:,h:s,h:s])
+    image_crop[:,4,:,:,:] = upsample(image[:,:,q:s-q,q:s-q])
+    image_crop[:,5,:,:,:] = upsample(image[:,:,0:s-q,0:s-q])
+    image_crop[:,6,:,:,:] = upsample(image[:,:,0:s-q,q:s])
+    image_crop[:,7,:,:,:] = upsample(image[:,:,q:s,0:s-q])
+    image_crop[:,8,:,:,:] = upsample(image[:,:,q:s,q:s])
+    image_crop[:,9,:,:,:] = image
+    output = model(image_crop.view(-1, image.shape[1], image.shape[2], image.shape[3]))
+    output = nn.Softmax(dim=1)(output)
+    output = output.view(image.shape[0], 10, -1)
+    output = output[torch.arange(image.shape[0]),:,target]
+    maxVal, maxIndex = torch.max(output, 1)
+    #cropImage = image_crop[torch.arange(image.shape[0]), maxIndex, :, :, :]
+    #for i in range(20):
+    #    writer.add_image('image'+str(epoch)+str(i), unorm(image[i]))
+    #    writer.add_image('image'+str(epoch)+str(i)+'selected', unorm(cropImage[i]))
+    #    writer.add_scalar('image'+str(epoch)+str(i)+'softmax',maxVal[i])
+    return image_crop[torch.arange(image.shape[0]), maxIndex, :, :, :]
+
+def rand_bbox2(size, lam):
+    W = size[2]
+    H = size[3]
+    cut_rat = np.sqrt(1. - lam)
+    cut_w = np.int(W * cut_rat)
+    cut_h = np.int(H * cut_rat)
+
+    cut_w = np.clip(cut_w, 0, W-1)
+    cut_h = np.clip(cut_h, 0, H-1)
+    # uniform
+    bbx1 = np.random.randint(W-cut_w)
+    bby1 = np.random.randint(H-cut_h)
+
+    bbx2 = bbx1 + cut_w
+    bby2 = bby1 + cut_h
+
+    return bbx1, bby1, bbx2, bby2
+
+
 
 if __name__ == '__main__':
     main()

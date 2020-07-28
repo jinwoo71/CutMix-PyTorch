@@ -349,21 +349,16 @@ def train(train_loader, model, criterion, optimizer, epoch):
                 loss = criterion(output, target_a) * (1.0 - alpha) + criterion(output, target_b) * alpha
             elif args.method == 'cutmix_no_style' :
                 print("cutmix_no_style")
-                lam = 0.5#np.random.beta(1.0, 1.0)
+                lam = np.random.beta(1.0, 1.0)
                 # lam = retio of area
                 # lam = 0 : 0% A image, 100% B image
                 # lam = 1 : 100% A image, 0% B image
-                bbx1, bby1, bbx2, bby2 = rand_bbox(input.size(), lam)
                 with torch.no_grad():
-                    mixImage = style_transfer_no_style(vgg, decoder, content, style, bbx1, bby1, bbx2, bby2)
+                    lam, mixImage = style_transfer_no_style(vgg, decoder, content, style, lam)
                 # adjust lambda to exactly match pixel ratio
-                lam = 1 - ((bbx2 - bbx1) * (bby2 - bby1) / (input.size()[-1] * input.size()[-2]))
                 # compute output
                 output = model(mixImage)
                 loss = (lam) * criterion(output, target_a) + (1 - lam) * criterion(output, target_b)
-                print("front")
-                print(loss)
-                print(mixImage)
             elif args.method == 'cutmix_style' :
                 # cutmix in feature map
                 print("cutmix_style")
@@ -424,7 +419,6 @@ def train(train_loader, model, criterion, optimizer, epoch):
                 loss = criterion(output, target_a) * (1 - alpha + alpha * lam) + criterion(output, target_b) * (1. - lam) * alpha
             else :
                 None
-
             # The code below is for outputting an image.
             #for i in range(40):
             #    grid = torch.stack([content[i].cpu().squeeze(0), mixImage[i].cpu().squeeze(0), style[i].cpu().squeeze(0)], dim = 0)
@@ -646,13 +640,15 @@ def symmetric_style_transfer_v2(vgg, decoder, content, style, alpha, beta):
     feat = beta * (1-alpha) * content_f + beta * alpha * style_f + (1-beta) * (1-alpha) * adain_content_style + (1-beta) * alpha * adain_style_content
     return decoder(feat)
 
-def style_transfer_no_style(vgg, decoder, content, style, bbx1, bby1, bbx2, bby2):
+def style_transfer_no_style(vgg, decoder, content, style, lam):
     #assert (0.0 <= alpha <= 1.0)
     content_f = vgg(content)
     style_f = vgg(style)
+    bbx1, bby1, bbx2, bby2 = rand_bbox(content_f.size(), lam)
+    lam = 1 - ((bbx2 - bbx1) * (bby2 - bby1) / (content_f.size()[-1] * content_f.size()[-2]))
     content_f[:,:,bbx1:bbx2,bby1:bby2] = style_f[:,:,bbx1:bbx2,bby1:bby2]
     feat = content_f
-    return decoder(feat)
+    return lam, decoder(feat)
 
 def crop10(image, model, target, epoch):
     size = image.shape[2]
@@ -682,25 +678,6 @@ def crop10(image, model, target, epoch):
     #    writer.add_image('image'+str(epoch)+str(i)+'selected', unorm(cropImage[i]))
     #    writer.add_scalar('image'+str(epoch)+str(i)+'softmax',maxVal[i])
     return image_crop[torch.arange(image.shape[0]), maxIndex, :, :, :]
-
-def rand_bbox2(size, lam):
-    W = size[2]
-    H = size[3]
-    cut_rat = np.sqrt(1. - lam)
-    cut_w = np.int(W * cut_rat)
-    cut_h = np.int(H * cut_rat)
-
-    cut_w = np.clip(cut_w, 0, W-1)
-    cut_h = np.clip(cut_h, 0, H-1)
-    # uniform
-    bbx1 = np.random.randint(W-cut_w)
-    bby1 = np.random.randint(H-cut_h)
-
-    bbx2 = bbx1 + cut_w
-    bby2 = bby1 + cut_h
-
-    return bbx1, bby1, bbx2, bby2
-
 
 
 if __name__ == '__main__':

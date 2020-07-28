@@ -9,5 +9,5 @@ python train.py \
     -j 40 \
     --beta 1.0 \
     --cutmix_prob 1.0 \
-    --method cutmix_no_style \
+    --method cutmix \
     --no-verbose

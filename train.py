@@ -347,6 +347,16 @@ def train(train_loader, model, criterion, optimizer, epoch):
                 # when alpha = 0 : loss = criterion(output, target_a)
                 # when alpha = 1 : loss = criterion(output, target_b)
                 loss = criterion(output, target_a) * (1.0 - alpha) + criterion(output, target_b) * alpha
+            elif args.method == 'cutmix' :
+                print("cutmix")
+                lam = np.random.beta(1.0, 1.0)
+                bbx1, bby1, bbx2, bby2 = rand_bbox(input.size(), lam)
+                input[:, :, bbx1:bbx2, bby1:bby2] = input[rand_index, :, bbx1:bbx2, bby1:bby2]
+                # adjust lambda to exactly match pixel ratio
+                lam = 1 - ((bbx2 - bbx1) * (bby2 - bby1) / (input.size()[-1] * input.size()[-2]))
+                # compute output
+                output = model(input)
+                loss = criterion(output, target_a) * lam + criterion(output, target_b) * (1. - lam)
             elif args.method == 'cutmix_no_style' :
                 print("cutmix_no_style")
                 lam = np.random.beta(1.0, 1.0)

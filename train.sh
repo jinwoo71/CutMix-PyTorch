@@ -6,8 +6,8 @@ python train.py \
     --depth 18 \
     --epochs 300 \
     --expname ResNet18 \
-    -j 40 \
+    -zj 40 \
     --beta 1.0 \
     --cutmix_prob 1.0 \
-    --method cutmix \
+    --method cutmix_exp3_style \
     --no-verbose

@@ -29,25 +29,26 @@ from torch.utils.tensorboard import SummaryWriter
 import net
 from function import adaptive_instance_normalization, coral
 import torch.nn.functional as F
-
+from IPython import embed
 # Because part of the training data is truncated image
 from PIL import ImageFile
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 
+from datetime import datetime
+from scipy.special import comb
 warnings.filterwarnings("ignore")
-writer = SummaryWriter('runs/naver')
 model_names = sorted(name for name in models.__dict__
                      if name.islower() and not name.startswith("__")
                      and callable(models.__dict__[name]))
 
 parser = argparse.ArgumentParser(description='Cutmix PyTorch CIFAR-10, CIFAR-100 and ImageNet-1k Training')
-parser.add_argument('--net_type', default='pyramidnet', type=str,
+parser.add_argument('--net_type', default='resnet', type=str,
                     help='networktype: resnet, and pyamidnet')
-parser.add_argument('-j', '--workers', default=4, type=int, metavar='N',
+parser.add_argument('-j', '--workers', default=40, type=int, metavar='N',
                     help='number of data loading workers (default: 4)')
-parser.add_argument('--epochs', default=90, type=int, metavar='N',
+parser.add_argument('--epochs', default=300, type=int, metavar='N',
                     help='number of total epochs to run')
-parser.add_argument('-b', '--batch_size', default=128, type=int,
+parser.add_argument('-b', '--batch_size', default=64, type=int,
                     metavar='N', help='mini-batch size (default: 256)')
 parser.add_argument('--lr', '--learning-rate', default=0.1, type=float,
                     metavar='LR', help='initial learning rate')
@@ -57,7 +58,7 @@ parser.add_argument('--weight-decay', '--wd', default=1e-4, type=float,
                     metavar='W', help='weight decay (default: 1e-4)')
 parser.add_argument('--print-freq', '-p', default=1, type=int,
                     metavar='N', help='print frequency (default: 10)')
-parser.add_argument('--depth', default=32, type=int,
+parser.add_argument('--depth', default=18, type=int,
                     help='depth of the network (default: 32)')
 parser.add_argument('--no-bottleneck', dest='bottleneck', action='store_false',
                     help='to use basicblock for CIFAR datasets (default: bottleneck)')
@@ -67,14 +68,17 @@ parser.add_argument('--no-verbose', dest='verbose', action='store_false',
                     help='to print the status at every iteration')
 parser.add_argument('--alpha', default=300, type=float,
                     help='number of new channel increases per depth (default: 300)')
-parser.add_argument('--expname', default='TEST', type=str,
+parser.add_argument('--expname', default='ResNet18', type=str,
                     help='name of experiment')
-parser.add_argument('--beta', default=0, type=float,
+parser.add_argument('--beta', default=1.0, type=float,
                     help='hyperparameter beta')
-parser.add_argument('--cutmix_prob', default=0, type=float,
+parser.add_argument('--cutmix_prob', default=1.0, type=float,
                     help='cutmix probability')
 parser.add_argument('--vgg', type=str, default='models/vgg_normalised.pth')
 parser.add_argument('--decoder', type=str, default='models/decoder_iter_110300.pth.tar')
+parser.add_argument('--param',default=1.0, type=float,help='temp param')
+parser.add_argument('--param2',default=1.0, type=float,help='temp param2')
+parser.add_argument('--param3',default=1, type=int,help='temp param3')
 #####################################
 # Check here before running the code!
 # Enter the appropriate method and pretrained model
@@ -84,8 +88,15 @@ parser.add_argument('--pretrained', type=str, default='models/pretrained_100Clas
 parser.set_defaults(bottleneck=True)
 parser.set_defaults(verbose=True)
 
+now = datetime.now()
+date_time = now.strftime("%m%d%Y%H%M")
+#writer = SummaryWriter('runs/'+'F'+parser.parse_args().method+date_time)
+#writer = SummaryWriter('runs/'+'Plain'+date_time)
+#writer = SummaryWriter('runs/'+'prime'+str(parser.parse_args().param) + str(parser.parse_args().param2) + parser.parse_args().method+date_time)
+writer = SummaryWriter('runs/'+'B'+str(parser.parse_args().param3)+str(parser.parse_args().param) + str(parser.parse_args().param2) + parser.parse_args().method+date_time)
 best_err1 = 100
 best_err5 = 100
+
 
 class UnNormalize(object):
     def __init__(self, mean, std):
@@ -97,6 +108,7 @@ class UnNormalize(object):
         return tensor
 unorm = UnNormalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225))
 def main():
+
     global args, best_err1, best_err5
     args = parser.parse_args()
     print("args")
@@ -150,7 +162,9 @@ def main():
         # Check here before running the code!
         # You need to check appropriate dataset
         ##############################################
+        #traindir = os.path.join('/home_goya/jinwoo.choi/ImageNet/train_50Class_300Each/')
         traindir = os.path.join('/home_goya/jinwoo.choi/ImageNet/train_100Class_500Each/')
+        #valdir = os.path.join('/home_goya/jinwoo.choi/ImageNet/val_50Class_50Each/')
         valdir = os.path.join('/home_goya/jinwoo.choi/ImageNet/val_100Class_50Each/')
         normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                          std=[0.229, 0.224, 0.225])
@@ -286,11 +300,14 @@ def train(train_loader, model, criterion, optimizer, epoch):
         # Run style_mixup with a probability of 0.5
         if r < 0.5:
             rand_index = torch.randperm(input.size()[0]).cuda()
+            rand_index2 = torch.randperm(input.size()[0]).cuda()
             content = input
             style = input[rand_index]
+            style2 = input[rand_index2]
             mixImage = None
             target_a = target
             target_b = target[rand_index]
+            target_c = target[rand_index2]
             ########################################
             # Check here before running the code!
             # You need to enter the appropriate method in train.sh.
@@ -304,6 +321,13 @@ def train(train_loader, model, criterion, optimizer, epoch):
                 # when alpha = 0 : loss = criterion(output, target_a)
                 # when alpha = 1 : loss = 0.5 * criterion(output, target_a) + 0.5 * criterion(output, target_b)
                 loss = criterion(output, target_a) * (1.0 - 0.5 * alpha) + criterion(output, target_b) * 0.5 * alpha
+            elif args.method == 'mixup' :
+                print("mixup")
+                #alpha = np.random.uniform()
+                alpha = 0.5
+                mixImage = content*(1-alpha) + style*alpha
+                output = model(mixImage)
+                loss = criterion(output, target_a) * (1.0 - alpha) + criterion(output, target_b) * alpha
             elif args.method == 'symmetric_style_mixup' :
                 print("symmetric_style_mixup")
                 alpha = np.random.uniform()
@@ -318,13 +342,36 @@ def train(train_loader, model, criterion, optimizer, epoch):
                 # beta is a parameter that controls the style
                 # when beta = 0 : high style transfer
                 # when beta = 1 : low style transfer
-                alpha = np.random.uniform()
-                beta = np.random.uniform()
+                #alpha = np.random.uniform()
+                #alpha = np.random.beta(1.0, 1.0)
+                #alpha = np.random.beta(args.param, args.param)
+                alpha = np.random.beta(args.param, args.param)
+                beta = np.random.beta(args.param2, args.param2)
                 with torch.no_grad():
                     mixImage = symmetric_style_transfer_v2(vgg, decoder, content, style, alpha, beta)
                 output = model(mixImage)
                 # when alpha = 0 : loss = criterion(output, target_a)
                 # when alpha = 1 : loss = criterion(output, target_b)
+                alpha_prime = smoothstep(alpha, N=args.param3)
+                loss = criterion(output, target_a) * (1.0 - alpha_prime) + criterion(output, target_b) * alpha_prime
+                #loss *= args.param
+            elif args.method == 'symmetric_style_mixup_v3' :
+                print("symmetric_style_mixup_v3")
+                alpha = np.random.beta(args.param, args.param)
+                alpha = 0.5#np.random.beta(args.param, args.param)
+                beta = np.random.beta(args.param2, args.param2)
+                with torch.no_grad():
+                    mixImage = symmetric_style_transfer_v3(vgg, decoder, content, style, alpha, beta)
+                output = model(mixImage)
+                loss = criterion(output, target_a) * (1.0 - alpha) + criterion(output, target_b) * alpha
+            elif args.method == 'symmetric_style_mixup_v4' :
+                print("symmetric_style_mixup_v4")
+                alpha = np.random.beta(args.param, args.param)
+                alpha = 0.5#np.random.beta(args.param, args.param)
+                beta = np.random.beta(args.param2, args.param2)
+                with torch.no_grad():
+                    mixImage = symmetric_style_transfer_v4(vgg, decoder, content, style, alpha, beta)
+                output = model(mixImage)
                 loss = criterion(output, target_a) * (1.0 - alpha) + criterion(output, target_b) * alpha
             elif args.method == 'crop10_beta0.7_symmetric' :
                 print("crop10_beta0.7_symmetric")
@@ -411,7 +458,7 @@ def train(train_loader, model, criterion, optimizer, epoch):
             elif args.method == 'cutmix_symmetric_style_v2' :
                 print("cutmix_symmetric_style_v2")
                 lam = np.random.beta(1.0, 1.0)
-                alpha = np.random.uniform()
+                alpha = 0.5#np.random.uniform()
                 beta = np.random.uniform()
                 # lam = retio of area
                 # lam = 0 : 0% A image, 100% B image
@@ -427,6 +474,59 @@ def train(train_loader, model, criterion, optimizer, epoch):
                 # when lam = 0 : loss = (1 - alpha) * criterion(output, target_a) + (alpha) * criterion(output, target_b)
                 # when lam = 1 : loss = criterion(output, tartget_a)
                 loss = criterion(output, target_a) * (1 - alpha + alpha * lam) + criterion(output, target_b) * (1. - lam) * alpha
+            elif args.method == 'cutmix_exp_style' :
+                print("cutmix_exp_style")
+                # lam = retio of area
+                # lam = 0 : 0% A image, 100% B image
+                # lam = 1 : 100% A image, 0% B image
+                lam = np.random.beta(1.0, 1.0)
+                alpha = np.random.uniform()
+                bbx1, bby1, bbx2, bby2 = rand_bbox(input.size(), lam)
+                input[:, :, bbx1:bbx2, bby1:bby2] = input[rand_index, :, bbx1:bbx2, bby1:bby2]
+                # adjust lambda to exactly match pixel ratio
+                lam = 1 - ((bbx2 - bbx1) * (bby2 - bby1) / (input.size()[-1] * input.size()[-2]))
+                # compute output
+                with torch.no_grad():
+                    mixImage = style_transfer(vgg, decoder, input, style2, alpha)
+                output = model(mixImage)
+                loss = (criterion(output, target_a) * (lam) + criterion(output, target_b) * (1. - lam))*(1-alpha*0.5) + \
+                    criterion(output, target_c) * alpha*0.5
+            elif args.method == 'cutmix_exp2_style' :
+                print("cutmix_exp2_style")
+                # lam = retio of area
+                # lam = 0 : 0% A image, 100% B image
+                # lam = 1 : 100% A image, 0% B image
+                lam = np.random.beta(1.0, 1.0)
+                alpha = np.random.uniform()
+                alpha = 1.0#np.random.uniform()
+                #alpha = np.random.beta(1.0, args.s_alpha)
+                bbx1, bby1, bbx2, bby2 = rand_bbox(input.size(), lam)
+                input[:, :, bbx1:bbx2, bby1:bby2] = input[rand_index, :, bbx1:bbx2, bby1:bby2]
+                # adjust lambda to exactly match pixel ratio
+                lam = 1 - ((bbx2 - bbx1) * (bby2 - bby1) / (input.size()[-1] * input.size()[-2]))
+                # compute output
+                with torch.no_grad():
+                    mixImage = style_transfer(vgg, decoder, input, style2, alpha)
+                output = model(mixImage)
+                loss = criterion(output, target_a) * (lam) + criterion(output, target_b) * (1. - lam)
+            elif args.method == 'cutmix_exp3_style' :
+                print("cutmix_exp3_style")
+                # lam = retio of area
+                # lam = 0 : 0% A image, 100% B image
+                # lam = 1 : 100% A image, 0% B image
+                lam = np.random.beta(1.0, 1.0)
+                alpha = np.random.uniform()
+                #alpha = np.random.beta(1.0, args.s_alpha)
+                bbx1, bby1, bbx2, bby2 = rand_bbox(input.size(), lam)
+                input[:, :, bbx1:bbx2, bby1:bby2] = input[rand_index, :, bbx1:bbx2, bby1:bby2]
+                # adjust lambda to exactly match pixel ratio
+                lam = 1 - ((bbx2 - bbx1) * (bby2 - bby1) / (input.size()[-1] * input.size()[-2]))
+                # compute output
+                with torch.no_grad():
+                    mixImage = style_transfer(vgg, decoder, input, style2, alpha)
+                output = model(mixImage)
+                loss = (criterion(output, target_a) * (lam) + criterion(output, target_b) * (1. - lam))*(1-alpha*0.25) + \
+                    criterion(output, target_c) * alpha*0.25
             else :
                 None
             # The code below is for outputting an image.
@@ -434,9 +534,24 @@ def train(train_loader, model, criterion, optimizer, epoch):
             #    grid = torch.stack([content[i].cpu().squeeze(0), mixImage[i].cpu().squeeze(0), style[i].cpu().squeeze(0)], dim = 0)
             #    img_grid = torchvision.utils.make_grid(
             #    [unorm(tensor) for tensor in grid])
-                #grid_name = 'grid_'+str(i)+'.png'
-                #save_image(img_grid, grid_name)
+            #    grid_name = 'grid_'+str(i)+'.png'
+            #    save_image(img_grid, grid_name)
             #    writer.add_image('four_fashion_mnist_images'+str(i), img_grid)
+            # The code below is for outputting an canvas.
+            #canvas = []
+            #for i in range(2):
+            #    beta = i*1.0
+            #    for j in range(16):
+            #        alpha = j/15.0
+            #        with torch.no_grad():
+            #            mixImage = symmetric_style_transfer_v2(vgg, decoder, content[0].unsqueeze(0), style[0].unsqueeze(0), alpha, beta)
+            #        canvas.append(mixImage.cpu().squeeze(0))
+            #grid = torch.stack(canvas, dim = 0)
+            #img_grid = torchvision.utils.make_grid(
+            #[unorm(tensor) for tensor in grid])
+            #grid_name = 'grid_'+str(0)+'.png'
+            #save_image(img_grid, grid_name)
+            #writer.add_image('four_fashion_mnist_images'+str(0), img_grid)
         else:
             # compute output
             output = model(input)
@@ -570,7 +685,9 @@ def adjust_learning_rate(optimizer, epoch):
     if args.dataset.startswith('cifar'):
         lr = args.lr * (0.1 ** (epoch // (args.epochs * 0.5))) * (0.1 ** (epoch // (args.epochs * 0.75)))
     elif args.dataset == ('imagenet'):
-        if args.epochs == 300:
+        if args.epochs == 200:
+            lr = args.lr * (0.1 ** (epoch // 75))
+        elif args.epochs == 300:
             lr = args.lr * (0.1 ** (epoch // 75))
         else:
             lr = args.lr * (0.1 ** (epoch // 30))
@@ -650,6 +767,45 @@ def symmetric_style_transfer_v2(vgg, decoder, content, style, alpha, beta):
     feat = beta * (1-alpha) * content_f + beta * alpha * style_f + (1-beta) * (1-alpha) * adain_content_style + (1-beta) * alpha * adain_style_content
     return decoder(feat)
 
+def symmetric_style_transfer_v3(vgg, decoder, content, style, alpha, beta):
+    assert (0.0 <= alpha <= 1.0)
+    assert (0.0 <= beta <= 1.0)
+    lam = np.random.beta(alpha, alpha)
+
+    content_f = vgg(content)
+    style_f = vgg(style)
+    c_cutmix = style_f.clone()
+
+    bbx1, bby1, bbx2, bby2 = rand_bbox(content_f.size(), lam)
+    c_cutmix[:, :, bbx1:bbx2, bby1:bby2] = content_f[:, :, bbx1:bbx2, bby1:bby2]
+
+    adain_content_style = adaptive_instance_normalization(content_f, style_f)
+    adain_style_content = adaptive_instance_normalization(style_f, content_f)
+    feat = beta * c_cutmix + (1-beta) * (1-alpha) * adain_content_style + (1-beta) * alpha * adain_style_content
+    return decoder(feat)
+
+def symmetric_style_transfer_v4(vgg, decoder, content, style, alpha, beta):
+    assert (0.0 <= alpha <= 1.0)
+    assert (0.0 <= beta <= 1.0)
+    lam = np.random.beta(alpha, alpha)
+
+    content_f = vgg(content)
+    style_f = vgg(style)
+    bbx1, bby1, bbx2, bby2 = rand_bbox(content_f.size(), lam)
+
+    c_cutmix = style_f.clone()
+    c_cutmix[:, :, bbx1:bbx2, bby1:bby2] = content_f[:, :, bbx1:bbx2, bby1:bby2]
+
+    adain_content_style = adaptive_instance_normalization(content_f, style_f)
+    adain_style_content = adaptive_instance_normalization(style_f, content_f)
+
+    s_cutmix = adain_style_content.clone()
+    s_cutmix[:, :, bbx1:bbx2, bby1:bby2] = adain_content_style[:, :, bbx1:bbx2, bby1:bby2]
+
+    feat = beta * c_cutmix + (1-beta) * s_cutmix
+    return decoder(feat)
+
+
 def style_transfer_no_style(vgg, decoder, content, style, lam):
     #assert (0.0 <= alpha <= 1.0)
     content_f = vgg(content)
@@ -688,6 +844,17 @@ def crop10(image, model, target, epoch):
     #    writer.add_image('image'+str(epoch)+str(i)+'selected', unorm(cropImage[i]))
     #    writer.add_scalar('image'+str(epoch)+str(i)+'softmax',maxVal[i])
     return image_crop[torch.arange(image.shape[0]), maxIndex, :, :, :]
+
+def smoothstep(x, x_min=0, x_max=1, N=1):
+    x = np.clip((x - x_min) / (x_max - x_min), 0, 1)
+
+    result = 0
+    for n in range(0, N + 1):
+        result += comb(N + n, n) * comb(2 * N + 1, N - n) * (-x) ** n
+
+    result *= x ** (N + 1)
+
+    return result
 
 
 if __name__ == '__main__':

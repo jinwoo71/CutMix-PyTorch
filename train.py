@@ -540,7 +540,118 @@ def train(train_loader, model, criterion, optimizer, epoch):
                 # when lam = 0 : loss = (1 - alpha) * criterion(output, target_a) + (alpha) * criterion(output, target_b)
                 # when lam = 1 : loss = criterion(output, tartget_a)
                 loss = criterion(output, target_a) * (lam + (1.-lam)*(1.-alpha)) + criterion(output, target_b) * (1. - lam) * alpha
-
+            elif args.method == 'squeeze9' :
+                l = input.shape[3]
+                mode = torch.randint(0, 3, (1,))
+                ############################
+                # mode 0 # mode 1 # mode 2 #
+                #   AAA  #   AAX  #   AXX  #
+                #   AAA  #   AAX  #   XXX  #
+                #   AAA  #   XXX  #   XXX  #
+                ################# ##########
+                if mode == 0:
+                    squeeze_image = content
+                    lam = 1
+                    direction = 0
+                else:
+                    s = []
+                    for i in range(9):
+                        s.append(torch.randint(0, 2, (1,)))
+                    # s = 0 : content, s = 1 : style
+                    size = l // 3
+                    l_fake = size * 3
+                    squeeze_image2 = torch.zeros(input.shape[0], input.shape[1], l_fake, l_fake).cuda()
+                    u = nn.Upsample(size=(size, size), mode='bilinear')
+                    for x in range(3):
+                        for y in range(3):
+                            squeeze_image2[:,:,size*x:size*(x+1),size*y:size*(y+1)] = u(style) if s[x*3+y] else u(content)
+                    if mode == 1 :
+                        direction = torch.randint(0, 4, (1,))
+                        #################################
+                        # d = 0 # d = 1 # d = 2 # d = 3 #
+                        #  AAX  #  XAA  #  XXX  #  XXX  #
+                        #  AAX  #  XAA  #  AAX  #  XAA  #
+                        #  XXX  #  XXX  #  AAX  #  XAA  #
+                        #################################
+                        u2 = nn.Upsample(size=(size*2, size*2), mode='bilinear')
+                        x = direction // 2
+                        y = direction % 2
+                        squeeze_image2[:,:,size*x:size*(x+2),size*y:size*(y+2)] = u2(content)
+                        for a in range(2):
+                            for b in range(2):
+                                s[3*x+y+3*a+b] = 0
+                    u3 = nn.Upsample(size=(l, l), mode='bilinear')
+                    squeeze_image = u3(squeeze_image2)
+                    total = float(l*l)
+                    areaA = float(l*l*(9-sum(s)))/9.0
+                    lam = areaA / total
+                # lam = retio of area
+                # lam = 0 : 0% A image, 100% B image
+                # lam = 1 : 100% A image, 0% B image
+                #with torch.no_grad():
+                    #mixImage = symmetric_style_transfer_v2(vgg, decoder, content, style, alpha, beta)
+                output = model(squeeze_image)
+                # when lam = 0 : loss = (1 - alpha) * criterion(output, target_a) + (alpha) * criterion(output, target_b)
+                # when lam = 1 : loss = criterion(output, tartget_a)
+                loss = criterion(output, target_a) * (lam) + criterion(output, target_b) * (1. - lam)
+            elif args.method == 'squeeze9_symmetric_style_V2' :
+                l = input.shape[3]
+                mode = torch.randint(0, 3, (1,))
+                ############################
+                # mode 0 # mode 1 # mode 2 #
+                #   AAA  #   SS  #   SSS   #
+                #   AAA  #   SS  #   SSS   #
+                #   AAA  #       #   SSS   #
+                ################# ##########
+                if mode == 0:
+                    squeeze_image = content
+                    lam = 1
+                elif mode == 1:
+                    size = l // 2
+                    imageList = []
+                    beta = np.random.uniform()
+                    with torch.no_grad():
+                        mixImage1 = symmetric_style_transfer_v2(vgg, decoder, content, style, 1.0/3.0, beta)
+                        mixImage2 = symmetric_style_transfer_v2(vgg, decoder, content, style, 2.0/3.0, beta)
+                    imageList.append(content)
+                    imageList.append(mixImage1)
+                    imageList.append(mixImage2)
+                    imageList.append(style)
+                    randomIndex = torch.randperm(4).cuda()
+                    squeeze_image = torch.zeros_like(input).cuda()
+                    u = nn.Upsample(size=(size, size), mode='bilinear')
+                    for x in range(2):
+                        for y in range(2):
+                            squeeze_image[:,:,x*size:(x+1)*size,y*size:(y+1)*size] = u(imageList[randomIndex[2*x+y]])
+                    lam = 0.5
+                else:
+                    size = l // 3
+                    l_fake = 3 * size
+                    imageList = []
+                    beta = np.random.uniform()
+                    imageList.append(content)
+                    with torch.no_grad():
+                        for index in range(7):
+                            imageList.append(symmetric_style_transfer_v2(vgg, decoder, content, style, (index+1)/8.0, beta))
+                    imageList.append(style)
+                    randomIndex = torch.randperm(9).cuda()
+                    squeeze_image2 = torch.zeros(input.shape[0], input.shape[1], l_fake, l_fake).cuda()
+                    u = nn.Upsample(size=(size, size), mode='bilinear')
+                    for x in range(3):
+                        for y in range(3):
+                            squeeze_image2[:,:,x*size:(x+1)*size,y*size:(y+1)*size] = u(imageList[randomIndex[3*x+y]])
+                    u2 = nn.Upsample(size=(l, l), mode='bilinear')
+                    squeeze_image = u2(squeeze_image2)
+                    lam = 0.5
+                # lam = retio of area
+                # lam = 0 : 0% A image, 100% B image
+                # lam = 1 : 100% A image, 0% B image
+                #with torch.no_grad():
+                    #mixImage = symmetric_style_transfer_v2(vgg, decoder, content, style, alpha, beta)
+                output = model(squeeze_image)
+                # when lam = 0 : loss = (1 - alpha) * criterion(output, target_a) + (alpha) * criterion(output, target_b)
+                # when lam = 1 : loss = criterion(output, tartget_a)
+                loss = criterion(output, target_a) * (lam) + criterion(output, target_b) * (1. - lam)
             else :
                 None
             # The code below is for outputting an image.

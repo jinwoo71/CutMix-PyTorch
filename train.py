@@ -456,13 +456,13 @@ def train(train_loader, model, criterion, optimizer, epoch):
                 loss = criterion(output, target_a) * (lam) + criterion(output, target_b) * (1. - lam)
             elif args.method == 'squeeze2_blank2' :
                 len = input.shape[3]
-                size = torch.randint(0, len, (1,))
+                size = torch.randint(1, len-1, (1,))
                 direction = torch.randint(0, 2, (1,))
                 x = len-size if direction else size
                 y = size
                 # direction = 0        direction = 1
-                #       A0        VS       0A
-                #       0B                 B0
+                #       A0        VS       0B
+                #       0B                 A0
                 total = float(size*size+(len-size)*(len-size))
                 areaA = float(size*size)
                 lam = areaA / total
@@ -544,11 +544,11 @@ def train(train_loader, model, criterion, optimizer, epoch):
             else :
                 None
             # The code below is for outputting an image.
-            for i in range(40):
+            for i in range(2):
                 grid = torch.stack([content[i].cpu().squeeze(0), squeeze_image[i].cpu().squeeze(0), style[i].cpu().squeeze(0)], dim = 0)
                 img_grid = torchvision.utils.make_grid(
                 [unorm(tensor) for tensor in grid])
-                grid_name = 'grid_'+str(i)+'.png'
+                grid_name = 'grid_'+str(i)+'_'+str(direction)+'_'+str(lam)+'.png'
                 save_image(img_grid, grid_name)
             #    writer.add_image('four_fashion_mnist_images'+str(i), img_grid)
         else:

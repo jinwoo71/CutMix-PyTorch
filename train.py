@@ -93,7 +93,7 @@ date_time = now.strftime("%m%d%Y%H%M")
 #writer = SummaryWriter('runs/'+'F'+parser.parse_args().method+date_time)
 #writer = SummaryWriter('runs/'+'Plain'+date_time)
 #writer = SummaryWriter('runs/'+'prime'+str(parser.parse_args().param) + str(parser.parse_args().param2) + parser.parse_args().method+date_time)
-writer = SummaryWriter('runs/'+'B'+str(parser.parse_args().param3)+str(parser.parse_args().param) + str(parser.parse_args().param2) + parser.parse_args().method+date_time)
+writer = SummaryWriter('runs/'+'BIG'+str(parser.parse_args().param3)+str(parser.parse_args().param) + str(parser.parse_args().param2) + parser.parse_args().method+date_time)
 best_err1 = 100
 best_err5 = 100
 
@@ -163,9 +163,9 @@ def main():
         # You need to check appropriate dataset
         ##############################################
         #traindir = os.path.join('/home_goya/jinwoo.choi/ImageNet/train_50Class_300Each/')
-        traindir = os.path.join('/home_goya/jinwoo.choi/ImageNet/train_100Class_500Each/')
+        traindir = os.path.join('/home_goya/jinwoo.choi/ImageNet/train_100Class_400Each_V2/')
         #valdir = os.path.join('/home_goya/jinwoo.choi/ImageNet/val_50Class_50Each/')
-        valdir = os.path.join('/home_goya/jinwoo.choi/ImageNet/val_100Class_50Each/')
+        valdir = os.path.join('/home_goya/jinwoo.choi/ImageNet/val_100Class_50Each_V2/')
         normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                          std=[0.229, 0.224, 0.225])
 
@@ -358,21 +358,15 @@ def train(train_loader, model, criterion, optimizer, epoch):
             elif args.method == 'symmetric_style_mixup_v3' :
                 print("symmetric_style_mixup_v3")
                 alpha = np.random.beta(args.param, args.param)
-                alpha = 0.5#np.random.beta(args.param, args.param)
+                #alpha = 0.5#np.random.beta(args.param, args.param)
                 beta = np.random.beta(args.param2, args.param2)
                 with torch.no_grad():
-                    mixImage = symmetric_style_transfer_v3(vgg, decoder, content, style, alpha, beta)
+                    mixImage, lam = symmetric_style_transfer_v3(vgg, decoder, content, style, alpha, beta)
                 output = model(mixImage)
-                loss = criterion(output, target_a) * (1.0 - alpha) + criterion(output, target_b) * alpha
-            elif args.method == 'symmetric_style_mixup_v4' :
-                print("symmetric_style_mixup_v4")
-                alpha = np.random.beta(args.param, args.param)
-                alpha = 0.5#np.random.beta(args.param, args.param)
-                beta = np.random.beta(args.param2, args.param2)
-                with torch.no_grad():
-                    mixImage = symmetric_style_transfer_v4(vgg, decoder, content, style, alpha, beta)
-                output = model(mixImage)
-                loss = criterion(output, target_a) * (1.0 - alpha) + criterion(output, target_b) * alpha
+                if args.param3 == 1:
+                    loss = criterion(output, target_a) * lam + criterion(output, target_b) * (1.-lam)
+                else:
+                    loss = criterion(output, target_a) * (1.-lam) + criterion(output, target_b) * lam
             elif args.method == 'crop10_beta0.7_symmetric' :
                 print("crop10_beta0.7_symmetric")
                 # alpha follows the beta distribution.
@@ -395,6 +389,9 @@ def train(train_loader, model, criterion, optimizer, epoch):
                 # when alpha = 1 : loss = criterion(output, target_b)
                 loss = criterion(output, target_a) * (1.0 - alpha) + criterion(output, target_b) * alpha
             elif args.method == 'cutmix' :
+                # lam = retio of area
+                # lam = 0 : 0% A image, 100% B image
+                # lam = 1 : 100% A image, 0% B image
                 print("cutmix")
                 lam = np.random.beta(1.0, 1.0)
                 bbx1, bby1, bbx2, bby2 = rand_bbox(input.size(), lam)
@@ -404,129 +401,24 @@ def train(train_loader, model, criterion, optimizer, epoch):
                 # compute output
                 output = model(input)
                 loss = criterion(output, target_a) * lam + criterion(output, target_b) * (1. - lam)
-            elif args.method == 'cutmix_no_style' :
-                print("cutmix_no_style")
-                lam = np.random.beta(1.0, 1.0)
-                # lam = retio of area
-                # lam = 0 : 0% A image, 100% B image
-                # lam = 1 : 100% A image, 0% B image
-                with torch.no_grad():
-                    lam, mixImage = style_transfer_no_style(vgg, decoder, content, style, lam)
-                # adjust lambda to exactly match pixel ratio
-                # compute output
+            elif args.method == 'mosaicmix_v1':
+                print("mosaicmix_v1")
+                #alpha = np.random.beta(args.param, args.param)
+                mixImage, lam = mosaicmix_v1(input, input[rand_index], args.param)
                 output = model(mixImage)
-                loss = (lam) * criterion(output, target_a) + (1 - lam) * criterion(output, target_b)
-            elif args.method == 'cutmix_style' :
-                # cutmix in feature map
-                print("cutmix_style")
-                lam = np.random.beta(1.0, 1.0)
-                alpha = np.random.uniform()
-                # lam = retio of area
-                # lam = 0 : 0% A image, 100% B image
-                # lam = 1 : 100% A image, 0% B image
-                with torch.no_grad():
-                    mixImage = style_transfer(vgg, decoder, content, style, alpha)
-                bbx1, bby1, bbx2, bby2 = rand_bbox(input.size(), lam)
-                input[:, :, bbx1:bbx2, bby1:bby2] = mixImage[:, :, bbx1:bbx2, bby1:bby2]
-                # adjust lambda to exactly match pixel ratio
-                lam = 1 - ((bbx2 - bbx1) * (bby2 - bby1) / (input.size()[-1] * input.size()[-2]))
-                # compute output
-                output = model(input)
-                # when lam = 0, alpha = 0 : loss = criterion(output, target_a)
-                # when lam = 0, alpha = 1 : loss = 0.5 * criterion(output, target_a) + 0.5 * criterion(output, target_b)
-                # when lam = 1, alpha = 0 : loss = criterion(output, target_a)
-                # when lam = 1, alpha = 1 : loss = criterion(output, target_a)
-                loss = criterion(output, target_a) * (1.0 - 0.5 * (1 - lam) * alpha) + criterion(output, target_b) * (0.5 * (1 - lam) * alpha)
-            elif args.method == 'cutmix_symmetric_style' :
-                print("cutmix_symmetric_style")
-                lam = np.random.beta(1.0, 1.0)
-                alpha = np.random.uniform()
-                # lam = retio of area
-                # lam = 0 : 0% A image, 100% B image
-                # lam = 1 : 100% A image, 0% B image
-                with torch.no_grad():
-                    mixImage = symmetric_style_transfer(vgg, decoder, content, style, alpha)
-                bbx1, bby1, bbx2, bby2 = rand_bbox(input.size(), lam)
-                input[:, :, bbx1:bbx2, bby1:bby2] = mixImage[:, :, bbx1:bbx2, bby1:bby2]
-                # adjust lambda to exactly match pixel ratio
-                lam = 1 - ((bbx2 - bbx1) * (bby2 - bby1) / (input.size()[-1] * input.size()[-2]))
-                # compute output
-                output = model(input)
-                # when lam = 0 : loss = (1 - alpha) * criterion(output, target_a) + (alpha) * criterion(output, target_b)
-                # when lam = 1 : loss = criterion(output, tartget_a)
-                loss = criterion(output, target_a) * (1 - alpha + alpha * lam) + criterion(output, target_b) * (1. - lam) * alpha
-            elif args.method == 'cutmix_symmetric_style_v2' :
-                print("cutmix_symmetric_style_v2")
-                lam = np.random.beta(1.0, 1.0)
-                alpha = 0.5#np.random.uniform()
-                beta = np.random.uniform()
-                # lam = retio of area
-                # lam = 0 : 0% A image, 100% B image
-                # lam = 1 : 100% A image, 0% B image
-                with torch.no_grad():
-                    mixImage = symmetric_style_transfer_v2(vgg, decoder, content, style, alpha, beta)
-                bbx1, bby1, bbx2, bby2 = rand_bbox(input.size(), lam)
-                input[:, :, bbx1:bbx2, bby1:bby2] = mixImage[:, :, bbx1:bbx2, bby1:bby2]
-                # adjust lambda to exactly match pixel ratio
-                lam = 1 - ((bbx2 - bbx1) * (bby2 - bby1) / (input.size()[-1] * input.size()[-2]))
-                # compute output
-                output = model(input)
-                # when lam = 0 : loss = (1 - alpha) * criterion(output, target_a) + (alpha) * criterion(output, target_b)
-                # when lam = 1 : loss = criterion(output, tartget_a)
-                loss = criterion(output, target_a) * (1 - alpha + alpha * lam) + criterion(output, target_b) * (1. - lam) * alpha
-            elif args.method == 'cutmix_exp_style' :
-                print("cutmix_exp_style")
-                # lam = retio of area
-                # lam = 0 : 0% A image, 100% B image
-                # lam = 1 : 100% A image, 0% B image
-                lam = np.random.beta(1.0, 1.0)
-                alpha = np.random.uniform()
-                bbx1, bby1, bbx2, bby2 = rand_bbox(input.size(), lam)
-                input[:, :, bbx1:bbx2, bby1:bby2] = input[rand_index, :, bbx1:bbx2, bby1:bby2]
-                # adjust lambda to exactly match pixel ratio
-                lam = 1 - ((bbx2 - bbx1) * (bby2 - bby1) / (input.size()[-1] * input.size()[-2]))
-                # compute output
-                with torch.no_grad():
-                    mixImage = style_transfer(vgg, decoder, input, style2, alpha)
+                loss = criterion(output, target_a) * lam + criterion(output, target_b) * (1. - lam)
+            elif args.method == 'mosaicmix_v2':
+                print("mosaicmix_v2")
+                #alpha = np.random.beta(args.param, args.param)
+                mixImage, lam = mosaicmix_v2(input, input[rand_index], args.param)
                 output = model(mixImage)
-                loss = (criterion(output, target_a) * (lam) + criterion(output, target_b) * (1. - lam))*(1-alpha*0.5) + \
-                    criterion(output, target_c) * alpha*0.5
-            elif args.method == 'cutmix_exp2_style' :
-                print("cutmix_exp2_style")
-                # lam = retio of area
-                # lam = 0 : 0% A image, 100% B image
-                # lam = 1 : 100% A image, 0% B image
-                lam = np.random.beta(1.0, 1.0)
-                alpha = np.random.uniform()
-                alpha = 1.0#np.random.uniform()
-                #alpha = np.random.beta(1.0, args.s_alpha)
-                bbx1, bby1, bbx2, bby2 = rand_bbox(input.size(), lam)
-                input[:, :, bbx1:bbx2, bby1:bby2] = input[rand_index, :, bbx1:bbx2, bby1:bby2]
-                # adjust lambda to exactly match pixel ratio
-                lam = 1 - ((bbx2 - bbx1) * (bby2 - bby1) / (input.size()[-1] * input.size()[-2]))
-                # compute output
-                with torch.no_grad():
-                    mixImage = style_transfer(vgg, decoder, input, style2, alpha)
+                loss = criterion(output, target_a) * lam + criterion(output, target_b) * (1. - lam)
+            elif args.method == 'script_v1':
+                print("script_v1")
+                #alpha = np.random.beta(args.param, args.param)
+                mixImage, lam = script_v1(input, input[rand_index], args.param, args.param2)
                 output = model(mixImage)
-                loss = criterion(output, target_a) * (lam) + criterion(output, target_b) * (1. - lam)
-            elif args.method == 'cutmix_exp3_style' :
-                print("cutmix_exp3_style")
-                # lam = retio of area
-                # lam = 0 : 0% A image, 100% B image
-                # lam = 1 : 100% A image, 0% B image
-                lam = np.random.beta(1.0, 1.0)
-                alpha = np.random.uniform()
-                #alpha = np.random.beta(1.0, args.s_alpha)
-                bbx1, bby1, bbx2, bby2 = rand_bbox(input.size(), lam)
-                input[:, :, bbx1:bbx2, bby1:bby2] = input[rand_index, :, bbx1:bbx2, bby1:bby2]
-                # adjust lambda to exactly match pixel ratio
-                lam = 1 - ((bbx2 - bbx1) * (bby2 - bby1) / (input.size()[-1] * input.size()[-2]))
-                # compute output
-                with torch.no_grad():
-                    mixImage = style_transfer(vgg, decoder, input, style2, alpha)
-                output = model(mixImage)
-                loss = (criterion(output, target_a) * (lam) + criterion(output, target_b) * (1. - lam))*(1-alpha*0.25) + \
-                    criterion(output, target_c) * alpha*0.25
+                loss = criterion(output, target_a) * lam + criterion(output, target_b) * (1. - lam)
             else :
                 None
             # The code below is for outputting an image.
@@ -538,20 +430,23 @@ def train(train_loader, model, criterion, optimizer, epoch):
             #    save_image(img_grid, grid_name)
             #    writer.add_image('four_fashion_mnist_images'+str(i), img_grid)
             # The code below is for outputting an canvas.
-            #canvas = []
-            #for i in range(2):
-            #    beta = i*1.0
-            #    for j in range(16):
-            #        alpha = j/15.0
-            #        with torch.no_grad():
-            #            mixImage = symmetric_style_transfer_v2(vgg, decoder, content[0].unsqueeze(0), style[0].unsqueeze(0), alpha, beta)
-            #        canvas.append(mixImage.cpu().squeeze(0))
-            #grid = torch.stack(canvas, dim = 0)
-            #img_grid = torchvision.utils.make_grid(
-            #[unorm(tensor) for tensor in grid])
-            #grid_name = 'grid_'+str(0)+'.png'
-            #save_image(img_grid, grid_name)
-            #writer.add_image('four_fashion_mnist_images'+str(0), img_grid)
+            """
+            canvas = []
+            for i in range(2):
+                beta = i*1.0
+                for j in range(16):
+                    alpha = j/15.0
+                    with torch.no_grad():
+                        #mixImage,_ = symmetric_style_transfer_v3(vgg, decoder, content[0].unsqueeze(0), style[0].unsqueeze(0), alpha, beta)
+                        mixImage,_ = mosaicmix_v1(content[0].unsqueeze(0), style[0].unsqueeze(0), 1.0)
+                    canvas.append(mixImage.cpu().squeeze(0))
+            grid = torch.stack(canvas, dim = 0)
+            img_grid = torchvision.utils.make_grid(
+            [unorm(tensor) for tensor in grid])
+            grid_name = 'grid_'+str(0)+'.png'
+            save_image(img_grid, grid_name)
+            writer.add_image('four_fashion_mnist_images'+str(0), img_grid)
+            """
         else:
             # compute output
             output = model(input)
@@ -768,26 +663,28 @@ def symmetric_style_transfer_v2(vgg, decoder, content, style, alpha, beta):
     return decoder(feat)
 
 def symmetric_style_transfer_v3(vgg, decoder, content, style, alpha, beta):
-    assert (0.0 <= alpha <= 1.0)
-    assert (0.0 <= beta <= 1.0)
-    lam = np.random.beta(alpha, alpha)
+    #assert (0.0 <= alpha <= 1.0)
+    #assert (0.0 <= beta <= 1.0)
+    #lam = np.random.beta(alpha, alpha)
+
+    c_cutmix = content.clone()
+    bbx1, bby1, bbx2, bby2 = rand_bbox(content.size(), alpha)
+    lam = 1 - ((bbx2 - bbx1) * (bby2 - bby1) / (content.size()[-1] * content.size()[-2]))
+    c_cutmix[:, :, bbx1:bbx2, bby1:bby2] = style[:, :, bbx1:bbx2, bby1:bby2]
 
     content_f = vgg(content)
     style_f = vgg(style)
-    c_cutmix = style_f.clone()
+    cutmix_f = vgg(c_cutmix)
 
-    bbx1, bby1, bbx2, bby2 = rand_bbox(content_f.size(), lam)
-    c_cutmix[:, :, bbx1:bbx2, bby1:bby2] = content_f[:, :, bbx1:bbx2, bby1:bby2]
-
-    adain_content_style = adaptive_instance_normalization(content_f, style_f)
-    adain_style_content = adaptive_instance_normalization(style_f, content_f)
-    feat = beta * c_cutmix + (1-beta) * (1-alpha) * adain_content_style + (1-beta) * alpha * adain_style_content
-    return decoder(feat)
+    adain_cutmix_content = adaptive_instance_normalization(cutmix_f, content_f)
+    adain_cutmix_style = adaptive_instance_normalization(cutmix_f, style_f)
+    feat = beta * cutmix_f + (1-beta) * (1-alpha) * adain_cutmix_content + (1-beta) * alpha * adain_cutmix_style
+    return decoder(feat),lam
 
 def symmetric_style_transfer_v4(vgg, decoder, content, style, alpha, beta):
-    assert (0.0 <= alpha <= 1.0)
-    assert (0.0 <= beta <= 1.0)
-    lam = np.random.beta(alpha, alpha)
+    #assert (0.0 <= alpha <= 1.0)
+    #assert (0.0 <= beta <= 1.0)
+    lam = alpha#np.random.beta(alpha, alpha)
 
     content_f = vgg(content)
     style_f = vgg(style)
@@ -845,6 +742,143 @@ def crop10(image, model, target, epoch):
     #    writer.add_scalar('image'+str(epoch)+str(i)+'softmax',maxVal[i])
     return image_crop[torch.arange(image.shape[0]), maxIndex, :, :, :]
 
+
+def squeeze(input1,input2,size):
+    area = 0
+    if size[0] > 0 and size[1] > 0 :
+        if torch.rand(1)>0.5:
+            out = nn.functional.interpolate(input1,size,mode='bilinear')
+            area += size[0]*size[1]
+        else:
+            out = nn.functional.interpolate(input2,size,mode='bilinear')
+    else:
+        out = 0
+    return out, area
+
+def squeeze2(input1,input2,size):
+    area = 0
+    area2 = 0
+    lam = np.random.beta(1.0, 1.0)
+    bbx1, bby1, bbx2, bby2 = rand_bbox2(input1.size(), lam, 0.4)
+
+    if size[0] > 0 and size[1] > 0 :
+        if torch.rand(1)>0.5:
+            input1 = input1[:,:,bbx1:bbx2,bby1:bby2]
+            out = nn.functional.interpolate(input1,size,mode='bilinear')
+            area += (bbx2 - bbx1) * (bby2 - bby1)
+        else:
+            input2 = input2[:,:,bbx1:bbx2,bby1:bby2]
+            out = nn.functional.interpolate(input2,size,mode='bilinear')
+            area2 += (bbx2 - bbx1) * (bby2 - bby1)
+    else:
+        out = 0
+    return out, area, area2
+def squeeze3(input1,input2,size,a1,a2):
+    lam = np.random.beta(1.0, 1.0)
+    bbx1, bby1, bbx2, bby2 = rand_bbox2(input1.size(), lam, 0.4)
+
+    if size[0] > 0 and size[1] > 0 :
+        if torch.rand(1)>0.5:
+            input1 = input1[:,:,bbx1:bbx2,bby1:bby2]
+            out = nn.functional.interpolate(input1,size,mode='bilinear')
+            a1[:,:,bbx1:bbx2,bby1:bby2] = 1.0
+        else:
+            input2 = input2[:,:,bbx1:bbx2,bby1:bby2]
+            out = nn.functional.interpolate(input2,size,mode='bilinear')
+            a2[:,:,bbx1:bbx2,bby1:bby2] = 1.0
+    else:
+        out = 0
+    return out,a1,a2
+
+def make(input1,input2,size,a1,a2, min_r):
+    lam = np.random.beta(1.0, 1.0)
+    bbx1, bby1, bbx2, bby2 = rand_bbox2(input1.size(), lam, min_r)
+    score = (bbx2 - bbx1) * (bby2 - bby1) * size[0] * size[1]
+
+    if size[0] > 0 and size[1] > 0 :
+        if torch.rand(1)>0.5:
+            input1 = input1[:,:,bbx1:bbx2,bby1:bby2]
+            out = nn.functional.interpolate(input1,size,mode='bilinear')
+            a1 += score
+        else:
+            input2 = input2[:,:,bbx1:bbx2,bby1:bby2]
+            out = nn.functional.interpolate(input2,size,mode='bilinear')
+            a2 += score
+    else:
+        out = 0
+    return out,a1,a2
+
+
+def mosaicmix_v1(input1, input2, alpha):
+    size = input1.shape
+    W = size[2]
+    H = size[3]
+
+    mix = input1.clone().fill_(0)
+    #cx = np.random.randint(W)
+    #cy = np.random.randint(H)
+    cx = np.int(np.round(W*np.random.beta(alpha, alpha)))
+    cy = np.int(np.round(H*np.random.beta(alpha, alpha)))
+
+    mix[:,:,0:cx,0:cy],a1_1,a1_2 = squeeze2(input1, input2, (cx,cy))
+    mix[:,:,0:cx,cy:H],a2_1,a2_2 = squeeze2(input1, input2, (cx,H-cy))
+    mix[:,:,cx:W,0:cy],a3_1,a3_2 = squeeze2(input1, input2, (W-cx,cy))
+    mix[:,:,cx:W,cy:H],a4_1,a4_2 = squeeze2(input1, input2, (W-cx,H-cy))
+
+    input1_area = a1_1 + a2_1 + a3_1 + a4_1
+    input2_area = a1_2 + a2_2 + a3_2 + a4_2
+    lam = input1_area/(input1_area+input2_area)
+    return mix, lam
+
+def mosaicmix_v2(input1, input2, alpha):
+    size = input1.shape
+    W = size[2]
+    H = size[3]
+
+    mix = input1.clone().fill_(0)
+    #cx = np.random.randint(W)
+    #cy = np.random.randint(H)
+    cx = np.int(np.round(W*np.random.beta(alpha, alpha)))
+    cy = np.int(np.round(H*np.random.beta(alpha, alpha)))
+
+    a1 = input1.clone().fill_(0)
+    a2 = input2.clone().fill_(0)
+
+    mix[:,:,0:cx,0:cy], a1, a2 = squeeze3(input1, input2, (cx,cy), a1, a2)
+    mix[:,:,0:cx,cy:H], a1, a2 = squeeze3(input1, input2, (cx,H-cy), a1, a2)
+    mix[:,:,cx:W,0:cy], a1, a2 = squeeze3(input1, input2, (W-cx,cy), a1, a2)
+    mix[:,:,cx:W,cy:H], a1, a2 = squeeze3(input1, input2, (W-cx,H-cy), a1, a2)
+
+    input1_area = a1.sum()
+    input2_area = a2.sum()
+    lam = input1_area/(input1_area+input2_area)
+    return mix, lam
+
+def script_v1(input1, input2, alpha, min_r):
+    size = input1.shape
+    W = size[2]
+    H = size[3]
+
+    mix = input1.clone().fill_(0)
+    #cx = np.random.randint(W)
+    #cy = np.random.randint(H)
+    cx = np.int(np.round(W*np.random.beta(alpha, alpha)))
+    cy = np.int(np.round(H*np.random.beta(alpha, alpha)))
+
+    a1 = 0
+    a2 = 0
+
+    mix[:,:,0:cx,0:cy], a1, a2 = make(input1, input2, (cx,cy), a1, a2, min_r)
+    mix[:,:,0:cx,cy:H], a1, a2 = make(input1, input2, (cx,H-cy), a1, a2, min_r)
+    mix[:,:,cx:W,0:cy], a1, a2 = make(input1, input2, (W-cx,cy), a1, a2, min_r)
+    mix[:,:,cx:W,cy:H], a1, a2 = make(input1, input2, (W-cx,H-cy), a1, a2, min_r)
+
+    lam = a1/(a1+a2)
+    return mix, lam
+
+
+
+#lam = 1 - ((bbx2 - bbx1) * (bby2 - bby1) / (input.size()[-1] * input.size()[-2]))
 def smoothstep(x, x_min=0, x_max=1, N=1):
     x = np.clip((x - x_min) / (x_max - x_min), 0, 1)
 
@@ -856,6 +890,23 @@ def smoothstep(x, x_min=0, x_max=1, N=1):
 
     return result
 
+def rand_bbox2(size, lam, min_r):
+    W = size[2]
+    H = size[3]
+    cut_rat = np.clip(np.sqrt(1. - lam), min_r, 1.0)
+    cut_w = np.int(W * cut_rat)
+    cut_h = np.int(H * cut_rat)
+
+    # uniform
+    cx = np.random.randint(W)
+    cy = np.random.randint(H)
+
+    bbx1 = np.clip(cx - cut_w // 2, 0, W)
+    bby1 = np.clip(cy - cut_h // 2, 0, H)
+    bbx2 = np.clip(cx + cut_w // 2, 0, W)
+    bby2 = np.clip(cy + cut_h // 2, 0, H)
+
+    return bbx1, bby1, bbx2, bby2
 
 if __name__ == '__main__':
     main()

@@ -35,7 +35,8 @@ from PIL import ImageFile
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 
 warnings.filterwarnings("ignore")
-writer = SummaryWriter('runs/naver')
+# Check
+writer = SummaryWriter('/home_goya/jinwoo.choi/runs/')
 model_names = sorted(name for name in models.__dict__
                      if name.islower() and not name.startswith("__")
                      and callable(models.__dict__[name]))
@@ -74,7 +75,7 @@ parser.add_argument('--beta', default=0, type=float,
 parser.add_argument('--cutmix_prob', default=0, type=float,
                     help='cutmix probability')
 parser.add_argument('--vgg', type=str, default='models/vgg_normalised.pth')
-parser.add_argument('--decoder', type=str, default='models/decoder_iter_110300.pth.tar')
+parser.add_argument('--decoder', type=str, default='models/decoder_iter_151200.pth.tar')
 #####################################
 # Check here before running the code!
 # Enter the appropriate method and pretrained model
@@ -150,8 +151,8 @@ def main():
         # Check here before running the code!
         # You need to check appropriate dataset
         ##############################################
-        traindir = os.path.join('/home_goya/jinwoo.choi/ImageNet/train_100Class_500Each/')
-        valdir = os.path.join('/home_goya/jinwoo.choi/ImageNet/val_100Class_50Each/')
+        traindir = os.path.join('/home_goya/jinwoo.choi/ImageNet/train_100Class_400Each_V2/')
+        valdir = os.path.join('/home_goya/jinwoo.choi/ImageNet/val_100Class_50Each_V2/')
         normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                          std=[0.229, 0.224, 0.225])
 
@@ -169,8 +170,8 @@ def main():
                 transforms.RandomResizedCrop(224),
                 transforms.RandomHorizontalFlip(),
                 transforms.ToTensor(),
-                #jittering,
-                #lighting,
+                jittering,
+                lighting,
                 normalize,
             ]))
 
@@ -327,6 +328,22 @@ def train(train_loader, model, criterion, optimizer, epoch):
                 # when alpha = 0 : loss = criterion(output, target_a)
                 # when alpha = 1 : loss = criterion(output, target_b)
                 loss = criterion(output, target_a) * (1.0 - alpha) + criterion(output, target_b) * alpha
+            elif args.method == 'content_style_mixup' :
+                print("content_style_mixup")
+                gamma = 0.05
+                alpha = 0.15
+                with torch.no_grad():
+                    mixImage, x, y = sty(vgg, decoder, content, style, alpha, gamma)
+                    # x = 1 : content A 100%
+                    # x = 0 : content B 100%
+                    # y = 1 : style A 100%
+                    # y = 0 : style B 100%
+                output = model(mixImage)
+                # when alpha = 0 : loss = criterion(output, target_a)
+                # when alpha = 1 : loss = criterion(output, target_b)
+                loss_content = criterion(output, target_a) * (x) + criterion(output, target_b) * (1.0-x)
+                loss_style = criterion(output, target_a) * (y) + criterion(output, target_b) * (1.0-y)
+                loss = 0.8 * loss_content + 0.2 * loss_style
             elif args.method == 'crop10_beta0.7_symmetric' :
                 print("crop10_beta0.7_symmetric")
                 # alpha follows the beta distribution.
@@ -655,12 +672,12 @@ def train(train_loader, model, criterion, optimizer, epoch):
             else :
                 None
             # The code below is for outputting an image.
-            for i in range(2):
-                grid = torch.stack([content[i].cpu().squeeze(0), squeeze_image[i].cpu().squeeze(0), style[i].cpu().squeeze(0)], dim = 0)
-                img_grid = torchvision.utils.make_grid(
-                [unorm(tensor) for tensor in grid])
-                grid_name = 'grid_'+str(i)+'_'+str(direction)+'_'+str(lam)+'.png'
-                save_image(img_grid, grid_name)
+            #for i in range(2):
+            #    grid = torch.stack([content[i].cpu().squeeze(0), squeeze_image[i].cpu().squeeze(0), style[i].cpu().squeeze(0)], dim = 0)
+            #    img_grid = torchvision.utils.make_grid(
+            #    [unorm(tensor) for tensor in grid])
+            #    grid_name = 'grid_'+str(i)+'_'+str(direction)+'_'+str(lam)+'.png'
+            #    save_image(img_grid, grid_name)
             #    writer.add_image('four_fashion_mnist_images'+str(i), img_grid)
         else:
             # compute output
@@ -907,6 +924,24 @@ def style_transfer_no_style(vgg, decoder, content, style, lam):
     content_f[:,:,bbx1:bbx2,bby1:bby2] = style_f[:,:,bbx1:bbx2,bby1:bby2]
     feat = content_f
     return lam, decoder(feat)
+
+def sty(vgg, decoder, content, style, alpha, gamma):
+    assert(0.0 <= alpha <= 1.0)
+    assert(0.0 <= gamma <= 1.0)
+    x = np.random.beta(alpha, alpha)
+    if x >= 1.0 - gamma:
+        return content, 1.0, 1.0
+    elif x <= gamma:
+        return style, 0.0, 0.0
+    else:
+        y = np.random.beta(1.0, 1.0)
+        t = np.random.uniform(max(0, x+y-1), min(x, y), 1)[0]
+        content_f = vgg(content)
+        style_f = vgg(style)
+        adain_content_style = adaptive_instance_normalization(content_f, style_f)
+        adain_style_content = adaptive_instance_normalization(style_f, content_f)
+        feat = t * content_f + (1.0-x-y+t) * style_f + (x-t) * adain_content_style + (y-t) * adain_style_content
+        return decoder(feat), x, y
 
 def crop10(image, model, target, epoch):
     size = image.shape[2]

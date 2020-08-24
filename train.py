@@ -112,6 +112,11 @@ def main():
     vgg.cuda()
     decoder.cuda()
 
+    global network
+    network = net.Net(vgg, decoder)
+    network.eval()
+    network = torch.nn.DataParallel(network).cuda()
+
     if args.dataset.startswith('cifar'):
         normalize = transforms.Normalize(mean=[x / 255.0 for x in [125.3, 123.0, 113.9]],
                                          std=[x / 255.0 for x in [63.0, 62.1, 66.7]])
@@ -274,7 +279,7 @@ def train(train_loader, model, criterion, optimizer, epoch):
 
     # switch to train mode
     model.train()
-
+    start = time.time()
     end = time.time()
     current_LR = get_learning_rate(optimizer)[0]
     for i, (input, target) in enumerate(train_loader):
@@ -306,6 +311,22 @@ def train(train_loader, model, criterion, optimizer, epoch):
                 # when alpha = 0 : loss = criterion(output, target_a)
                 # when alpha = 1 : loss = 0.5 * criterion(output, target_a) + 0.5 * criterion(output, target_b)
                 loss = criterion(output, target_a) * (1.0 - 0.5 * alpha) + criterion(output, target_b) * 0.5 * alpha
+            elif args.method == 'content_style_mixup_loss_labeling' :
+                x = np.random.uniform()
+                y = np.random.uniform()
+                with torch.no_grad():
+                    loss_a_s, loss_b_s, mixImage = network(content, style, x, y)
+                output = model(mixImage)
+                sr = loss_a_s / (loss_a_s + loss_b_s)
+                # sr = 0 : 100% A style
+                # sr = 1 : 100% B style
+                log_preds = F.log_softmax(output, dim=-1) # dimension [batch_size, numberofclass]
+                a_loss = -log_preds[torch.arange(output.shape[0]),target_a] # cross-entropy for A
+                b_loss = -log_preds[torch.arange(output.shape[0]),target_b] # cross-entropy for B
+                cr_loss = criterion(output, target_a) * (x) + criterion(output, target_b) * (1.0-x) # scalar
+                sr_loss = a_loss * (1-sr) + b_loss * sr # dimension [batch_size]
+                ratio = 0.7
+                loss = ratio * cr_loss + (1.0-ratio) * sr_loss.mean()
             elif args.method == 'symmetric_style_mixup' :
                 print("symmetric_style_mixup")
                 alpha = np.random.uniform()
@@ -708,7 +729,7 @@ def train(train_loader, model, criterion, optimizer, epoch):
                   'Top 5-err {top5.val:.4f} ({top5.avg:.4f})'.format(
                 epoch, args.epochs, i, len(train_loader), LR=current_LR, batch_time=batch_time,
                 data_time=data_time, loss=losses, top1=top1, top5=top5))
-
+    print("Time taken for 1 epoch : ",time.time()-start)
     print('* Epoch: [{0}/{1}]\t Top 1-err {top1.avg:.3f}  Top 5-err {top5.avg:.3f}\t Train Loss {loss.avg:.3f}'.format(
         epoch, args.epochs, top1=top1, top5=top5, loss=losses))
 

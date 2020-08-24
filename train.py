@@ -116,6 +116,10 @@ def main():
     network = net.Net(vgg, decoder)
     network.eval()
     network = torch.nn.DataParallel(network).cuda()
+    #global jinwoo
+    #jinwoo = net.Jinwoo()
+    #jinwoo.eval()
+    #jinwoo = torch.nn.DataParallel(jinwoo).cuda()
 
     if args.dataset.startswith('cifar'):
         normalize = transforms.Normalize(mean=[x / 255.0 for x in [125.3, 123.0, 113.9]],
@@ -320,10 +324,11 @@ def train(train_loader, model, criterion, optimizer, epoch):
                 sr = loss_a_s / (loss_a_s + loss_b_s)
                 # sr = 0 : 100% A style
                 # sr = 1 : 100% B style
+                #loss = jinwoo(output, target_a, target_b, sr, x, 0.7).mean()
                 log_preds = F.log_softmax(output, dim=-1) # dimension [batch_size, numberofclass]
                 a_loss = -log_preds[torch.arange(output.shape[0]),target_a] # cross-entropy for A
                 b_loss = -log_preds[torch.arange(output.shape[0]),target_b] # cross-entropy for B
-                cr_loss = criterion(output, target_a) * (x) + criterion(output, target_b) * (1.0-x) # scalar
+                cr_loss = a_loss.mean() * (x) + b_loss.mean() * (1.0-x) # scalar
                 sr_loss = a_loss * (1-sr) + b_loss * sr # dimension [batch_size]
                 ratio = 0.7
                 loss = ratio * cr_loss + (1.0-ratio) * sr_loss.mean()

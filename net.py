@@ -90,6 +90,18 @@ vgg = nn.Sequential(
     nn.Conv2d(512, 512, (3, 3)),
     nn.ReLU()  # relu5-4
 )
+criterion = nn.CrossEntropyLoss().cuda()
+class Jinwoo(nn.Module):
+    def __init__(self):
+        super(Jinwoo, self).__init__()
+    def forward(self, output, target_a, target_b, sr, x, ratio):
+        log_preds = F.log_softmax(output, dim=-1)
+        a_loss = -log_preds[torch.arange(output.shape[0]),target_a]
+        b_loss = -log_preds[torch.arange(output.shape[0]),target_b]
+        cr_loss = a_loss.mean() * (x) + b_loss.mean() * (1.0-x)
+        sr_loss = a_loss * (1-sr) + b_loss * sr
+        return ratio * cr_loss + (1.0-ratio) * sr_loss.mean()
+
 
 class Net(nn.Module):
     def __init__(self, encoder, decoder):
@@ -113,7 +125,7 @@ class Net(nn.Module):
         for i in range(4):
             func = getattr(self, 'enc_{:d}'.format(i + 1))
             results.append(func(results[-1]))
-        return results[1:]
+        return results[1], results[2], results[3], results[4]
 
     # extract relu4_1 from input image
     def encode(self, input):
@@ -153,16 +165,14 @@ class Net(nn.Module):
         assert 0 <= x <= 1
         assert 0 <= y <= 1
         t = np.random.uniform(max(0, x+y-1), min(x, y), 1)[0]
-        style_feats = self.encode_with_intermediate(style)
-        content_feats = self.encode_with_intermediate(content)
-        content_f = content_feats[3]
-        style_f = style_feats[3]
-        feat = t * content_f + (1.0-x-y+t) * style_f + (x-t) * adain(content_f, style_feats[-1]) + (y-t) * adain(style_f, content_feats[-1])
-        g_t = self.decoder(feat)
-        g_t_feats = self.encode_with_intermediate(g_t)
-        loss_a_s = (self.per_calc_style_loss(g_t_feats[0], content_feats[0]) + self.per_calc_style_loss(g_t_feats[1], content_feats[1]) +
-                    self.per_calc_style_loss(g_t_feats[2], content_feats[2]) + self.per_calc_style_loss(g_t_feats[3], content_feats[3]))
-        loss_b_s = (self.per_calc_style_loss(g_t_feats[0], style_feats[0]) + self.per_calc_style_loss(g_t_feats[1], style_feats[1])
-                    + self.per_calc_style_loss(g_t_feats[2], style_feats[2]) + self.per_calc_style_loss(g_t_feats[3], style_feats[3]))
+
+        style_f1, style_f2, style_f3, style_f4 = self.encode_with_intermediate(style)
+        content_f1, content_f2, content_f3, content_f4 = self.encode_with_intermediate(content)
+        g_t = self.decoder(t * content_f4 + (1.0-x-y+t) * style_f4 + (x-t) * adain(content_f4, style_f4) + (y-t) * adain(style_f4, content_f4))
+        g_t_f1, g_t_f2, g_t_f3, g_t_f4 = self.encode_with_intermediate(g_t)
+        loss_a_s = (self.per_calc_style_loss(g_t_f1, content_f1) + self.per_calc_style_loss(g_t_f2, content_f2) +
+                    self.per_calc_style_loss(g_t_f3, content_f3) + self.per_calc_style_loss(g_t_f4, content_f4))
+        loss_b_s = (self.per_calc_style_loss(g_t_f1, style_f1) + self.per_calc_style_loss(g_t_f2, style_f2)
+                    + self.per_calc_style_loss(g_t_f3, style_f3) + self.per_calc_style_loss(g_t_f4, style_f4))
         return loss_a_s, loss_b_s, g_t
 

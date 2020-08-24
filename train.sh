@@ -1,7 +1,7 @@
 python train.py \
     --net_type resnet \
     --dataset imagenet \
-    --batch_size 128 \
+    --batch_size 1280 \
     --lr 0.1 \
     --depth 18 \
     --epochs 250 \

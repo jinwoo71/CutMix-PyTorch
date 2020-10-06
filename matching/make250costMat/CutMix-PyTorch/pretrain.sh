@@ -1,0 +1,12 @@
+python pretrain.py \
+    --net_type resnet \
+    --dataset imagenet \
+    --batch_size 720 \
+    --lr 0.1 \
+    --depth 18 \
+    --epochs 300 \
+    --expname ResNet18 \
+    -j 40 \
+    --beta 1.0 \
+    --cutmix_prob 1.0 \
+    --no-verbose

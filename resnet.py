@@ -82,7 +82,7 @@ class Bottleneck(nn.Module):
 
 class ResNet(nn.Module):
     def __init__(self, dataset, depth, num_classes, bottleneck=False):
-        super(ResNet, self).__init__()        
+        super(ResNet, self).__init__()
         self.dataset = dataset
         if self.dataset.startswith('cifar'):
             self.inplanes = 16
@@ -99,7 +99,7 @@ class ResNet(nn.Module):
             self.relu = nn.ReLU(inplace=True)
             self.layer1 = self._make_layer(block, 16, n)
             self.layer2 = self._make_layer(block, 32, n, stride=2)
-            self.layer3 = self._make_layer(block, 64, n, stride=2) 
+            self.layer3 = self._make_layer(block, 64, n, stride=2)
             self.avgpool = nn.AvgPool2d(8)
             self.fc = nn.Linear(64 * block.expansion, num_classes)
 
@@ -117,8 +117,9 @@ class ResNet(nn.Module):
             self.layer2 = self._make_layer(blocks[depth], 128, layers[depth][1], stride=2)
             self.layer3 = self._make_layer(blocks[depth], 256, layers[depth][2], stride=2)
             self.layer4 = self._make_layer(blocks[depth], 512, layers[depth][3], stride=2)
-            self.avgpool = nn.AvgPool2d(7) 
+            self.avgpool = nn.AvgPool2d(7)
             self.fc = nn.Linear(512 * blocks[depth].expansion, num_classes)
+            #self.fc2 = nn.Linear(512 * blocks[depth].expansion, num_classes)
 
         for m in self.modules():
             if isinstance(m, nn.Conv2d):
@@ -150,7 +151,7 @@ class ResNet(nn.Module):
             x = self.conv1(x)
             x = self.bn1(x)
             x = self.relu(x)
-            
+
             x = self.layer1(x)
             x = self.layer2(x)
             x = self.layer3(x)
@@ -172,6 +173,8 @@ class ResNet(nn.Module):
 
             x = self.avgpool(x)
             x = x.view(x.size(0), -1)
-            x = self.fc(x)
-    
-        return x
+            x1 = self.fc(x)
+            #x2 = self.fc2(x)
+
+        #return x1,nn.functional.softmax(x2)
+        return x1#,x2

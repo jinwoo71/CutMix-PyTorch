@@ -1,1 +1,4 @@
-srun1 python train.py --method script_v1 --no-verbose --epochs 300 --param 5.0 --param2 0.4
+Style mixup
+srun2 python train.py --method a --no-verbose
+Cutmix
+srun2 python train.py --method cutmix --no-verbose

@@ -25,6 +25,8 @@ import warnings
 from matplotlib import pyplot as plt
 import matplotlib.gridspec as gridspec
 from function import calc_mean_std
+from function import adaptive_instance_normalization as adain
+from copulalib.copulalib import Copula
 
 from torch.utils.tensorboard import SummaryWriter
 import net
@@ -84,7 +86,7 @@ parser.add_argument('--param3',default=1.0, type=float, help='temp param3')
 parser.add_argument('--param4int',default=1, type=int, help='temp param4')
 parser.add_argument('--param5',default=0.2, type=float, help='temp param5')
 parser.add_argument('--r',default=1.0, type=float, help='augmentation prob')
-parser.add_argument('--term',default=75, type=int, help='lr jump term') # 75
+parser.add_argument('--term',default=100, type=int, help='lr jump term') # 75
 #####################################
 # Check here before running the code!
 # Enter the appropriate method and pretrained model
@@ -94,7 +96,7 @@ parser.add_argument('--pretrained', type=str, default='models/pretrained_100Clas
 parser.set_defaults(bottleneck=True)
 parser.set_defaults(verbose=True)
 
-writer = SummaryWriter('/home_goya/minui.hong/runs/'+'TMP'+str(parser.parse_args().param)+parser.parse_args().method)
+writer = SummaryWriter('/home_goya/minui.hong/runs/'+parser.parse_args().expname)
 best_err1 = 100
 best_err5 = 100
 
@@ -106,6 +108,23 @@ def per_calc_style_loss(input, target):
     t1 = F.mse_loss(input_mean, target_mean, reduction='none')
     t2 = F.mse_loss(input_std, target_std, reduction='none')
     return torch.mean(t1, dim=[1,2,3])+torch.mean(t2,dim=[1,2,3])
+def linear_combination(x, y, epsilon):
+    #epsilon = epsilon.cuda(x.device)
+    return epsilon*x + (1-epsilon)*y
+def reduce_loss(loss, reduction='mean'):
+    return loss.mean() if reduction=='mean' else loss.sum() if reduction=='sum' else loss
+class LSCrossEntropy(nn.Module):
+    def __init__(self, epsilon:float=0.1, reduction='mean'):
+        super().__init__()
+        self.epsilon = epsilon
+        self.reduction = reduction
+    def forward(self, preds, target, epsilon):
+        n = preds.size()[-1]
+        log_preds = F.log_softmax(preds, dim=-1)
+        loss = reduce_loss(-log_preds.sum(dim=-1), self.reduction)
+        nll = F.nll_loss(log_preds, target,  reduction=self.reduction)
+        return linear_combination(loss/n, nll, epsilon)
+
 
 class UnNormalize(object):
     def __init__(self, mean, std):
@@ -132,7 +151,7 @@ def main():
     vgg.cuda()
     decoder.cuda()
 
-    global network_E, network_D
+    global network_E, network_D, group_info, group_list, numberofclass
     # netowrk code added
     network_E = net.Net_E(vgg)
     network_D = net.Net_D(vgg, decoder)
@@ -141,6 +160,14 @@ def main():
     network_E = torch.nn.DataParallel(network_E).cuda()
     network_D = torch.nn.DataParallel(network_D).cuda()
 
+    global msenone
+    msenone = nn.MSELoss(reduction='none')
+    #Copula
+    #global frank
+    #x = np.random.normal(size=250)
+    #y = args.param*x + np.random.normal(size=250)
+    #frank = Copula(x,y,family='frank')
+    #global group, group_info, group_list, numberofclass
 
     if args.dataset.startswith('cifar'):
         normalize = transforms.Normalize(mean=[x / 255.0 for x in [125.3, 123.0, 113.9]],
@@ -181,13 +208,15 @@ def main():
         # Check here before running the code!
         # You need to check appropriate dataset
         ##############################################
-        traindir = os.path.join('/home_goya/jinwoo.choi/ImageNet/train_100Class_400Each_V2/')
+        #traindir = os.path.join('/home_goya/jinwoo.choi/ImageNet/train_100Class_400Each_V2/')
         #traindir = os.path.join('/home_goya/jinwoo.choi/ImageNet/train_20Class_400Each_V2/')
+        traindir = os.path.join('/home_goya/jinwoo.choi/ImageNet/train_66Class_300Each_M/')
         #traindir = os.path.join('/home_goya/jinwoo.choi/ImageNet/train/')
         #traindir = os.path.join('/home_goya/jinwoo.choi/ImageNet/train_250Class_400Each_V2/')
-        valdir = os.path.join('/home_goya/jinwoo.choi/ImageNet/val_100Class_50Each_V2/')
+        #valdir = os.path.join('/home_goya/jinwoo.choi/ImageNet/val_100Class_50Each_V2/')
         #valdir = os.path.join('/home_goya/jinwoo.choi/ImageNet/val_250Class_50Each_V2/')
         #valdir = os.path.join('/home_goya/jinwoo.choi/ImageNet/val_20Class_50Each_V2/')
+        valdir = os.path.join('/home_goya/jinwoo.choi/ImageNet/val_66Class_50Each_M/')
         #valdir = os.path.join('/home_goya/jinwoo.choi/ImageNet/val/')
         normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                          std=[0.229, 0.224, 0.225])
@@ -230,10 +259,24 @@ def main():
         # Check here before running the code!
         # You need to check numberofclass
         ############################################
-        numberofclass = 100#250
+        numberofclass = 66#250
 
     else:
         raise Exception('unknown dataset: {}'.format(args.dataset))
+
+
+    c2i = train_dataset.class_to_idx
+    group_list_raw = np.genfromtxt('group.txt', delimiter='\n', dtype='str')
+    group_list = np.array([np.array(l.split(','), dtype=np.int) for l in group_list_raw])
+    group_info = torch.zeros((66,))
+    for i in range(group_list.shape[0]):
+        for j in range(group_list[i].shape[0]):
+            group_info[c2i[str(group_list[i][j])]]=  i
+    group_info = group_info.type(torch.LongTensor)
+    print("c2i: ",c2i)
+    for i in range(66):
+        print(i, " : ", group_info[i])
+
 
     ###########################################
     # Check here before running the code!
@@ -260,7 +303,9 @@ def main():
     print('the number of model parameters: {}'.format(sum([p.data.nelement() for p in model.parameters()])))
 
     # define loss function (criterion) and optimizer
-    criterion = nn.CrossEntropyLoss().cuda()
+    criterion = nn.CrossEntropyLoss(reduction='none').cuda()
+    criterion2 = nn.CrossEntropyLoss().cuda()
+    #criterion2 = LSCrossEntropy().cuda()
     optimizer = torch.optim.SGD(model.parameters(), args.lr,
                                 momentum=args.momentum,
                                 weight_decay=args.weight_decay, nesterov=True)
@@ -275,7 +320,7 @@ def main():
         train_loss = train(train_loader, model, criterion, optimizer, epoch)
 
         # evaluate on validation set
-        err1, err5, val_loss = validate(val_loader, model, criterion, epoch)
+        err1, err5, val_loss = validate(val_loader, model, criterion2, epoch)
 
         writer.add_scalar('train_loss', train_loss, epoch+1)
         writer.add_scalar('val_loss', val_loss, epoch+1)
@@ -306,7 +351,8 @@ def train(train_loader, model, criterion, optimizer, epoch):
     losses = AverageMeter()
     top1 = AverageMeter()
     top5 = AverageMeter()
-
+    tmp = 0
+    tmp2 = 0.
     # switch to train mode
     model.train()
 
@@ -329,20 +375,61 @@ def train(train_loader, model, criterion, optimizer, epoch):
             if args.method == 'a' :
                 alpha = np.random.beta(1.0, 1.0)
                 beta = np.random.beta(1.0, 1.0)
-                gamma = np.random.beta(0.8, 0.8)
+                gamma_ = np.random.beta(1.0, 1.0)
+                gamma = gamma_*torch.ones(content.shape[0])
+                #alpha_, beta_ = frank.generate_uv(1)
+                #alpha = alpha_[0]
+                #beta = beta_[0]
+
+                #class-wise stylemix
+                gamma = gamma*torch.ones(content.shape[0])
+                same_group = (group_info[target_a] == group_info[target_b])
+
+
+                if args.param4int == 1:
+                    # same group style transfer
+                    gamma[~same_group] = args.param*1.0 + (1.-args.param)*gamma_
+                elif args.param4int == 2:
+                    # all style transfer
+                    gamma[:] = args.param*1.0  + (1.-args.param)*gamma
+                elif args.param4int == 3:
+                    # different group style transfer
+                    gamma[same_group] = 1.
+                else:
+                    exit()
+
                 M = torch.zeros(1,1,224,224).float()
                 bbx1, bby1, bbx2, bby2 = rand_bbox(M.size(), 1.-alpha)
-                M[:,:,bbx1:bbx2,bby1:bby2].fill_(1.)
                 with torch.no_grad():
                     content_feat = network_E(content)
+                    """
+                    ivicinity = per_calc_style_loss(content_feat[rand_index], content_feat)
+                    vicinity = smoothstep(vicinity.cpu(), x_min=20, x_max=200,N=9)
+                    gamma = vicinity*gamma
+                    if args.param4int == 1:
+                        # same group style transfer
+                        gamma = args.param*1.0 + (1.-args.param)*gamma
+                    elif args.param4int == 2:
+                        # diff group style transfer
+                        gamma = 1.0 - gamma
+                    """
                     mixImage = network_D(content, style, content_feat, content_feat[rand_index], alpha, beta, gamma, bbx1, bby1, bbx2, bby2)
                 lam = ((bbx2 - bbx1)*(bby2-bby1)/(224.*224.))
                 output  = model(mixImage)
 
                 loss_c = criterion(output, target_a) * (lam) + criterion(output, target_b) * (1. - lam)
                 loss_s = criterion(output, target_a) * (beta) + criterion(output, target_b) * (1. - beta)
+                gamma = gamma.cuda()
+                #sratio = gamma*lam + (1.0 - gamma) * beta
+                #loss_s = criterion(output, target_a) * (sratio) + criterion(output, target_b) * (1. - sratio)
                 ratio = 0.8
-                loss = gamma*loss_c + (1.-gamma)*(ratio*loss_c+(1.-ratio)*loss_s)
+
+                if torch.is_tensor(gamma):
+                    #gamma = gamma.cuda()
+                    loss = gamma*loss_c + (1.-gamma)*(ratio*loss_c+(1.-ratio)*loss_s)
+                    #loss = ratio*loss_c + (1.- ratio)*loss_s
+                    loss = loss.mean()
+
             elif args.method == 'cutmix' :
                 lam = np.random.beta(1.0, 1.0)
                 bbx1, bby1, bbx2, bby2 = rand_bbox(input.size(), lam)
@@ -350,9 +437,69 @@ def train(train_loader, model, criterion, optimizer, epoch):
                 lam = 1 - ((bbx2 - bbx1) * (bby2 - bby1) / (input.size()[-1] * input.size()[-2]))
                 output = model(input)
                 loss = criterion(output, target_a) * lam + criterion(output, target_b) * (1. - lam)
+                loss = loss.mean()
             elif args.method == 'plain':
                 output = model(input)
                 loss = criterion(output, target)
+            elif args.method == 'b':
+                alpha = np.random.beta(1.0, 1.0)
+                beta = np.random.beta(1.0, 1.0)
+                gamma_ = np.random.beta(1.0, 1.0)
+                gamma = gamma_*torch.ones(content.shape[0])
+
+                #class-wise stylemix
+                gamma = gamma*torch.ones(content.shape[0])
+                same_group = (group_info[target_a] == group_info[target_b])
+                M = torch.zeros(1,1,224,224).float()
+                bbx1, bby1, bbx2, bby2 = rand_bbox(M.size(), 1.-alpha)
+                with torch.no_grad():
+                    #content_feat = network_E(content)
+                    content_feat = network_E(content)
+                    s4 = content_feat
+                    #adain_cs = adain(content_feat, content_feat[rand_index])
+                    #adain_sc = adain(content_feat[rand_index], content_feat)
+                    #intensity = torch.mean(msenone(adain_cs, content_feat),dim=[1,2,3])
+                    #intensity = torch.mean(msenone(content_feat[rand_index], content_feat),dim=[1,2,3])
+                    #i1 = torch.mean(msenone(s1[rand_index], s1),dim=[1,2,3])
+                    #i2 = torch.mean(msenone(s2[rand_index], s2),dim=[1,2,3])
+                    #i3 = torch.mean(msenone(s3[rand_index], s3),dim=[1,2,3])
+                    #i4 = torch.mean(msenone(s4[rand_index], s4),dim=[1,2,3])
+                    #i1 = per_calc_style_loss(s1[rand_index], s1)
+                    #i2 = per_calc_style_loss(s2[rand_index], s2)
+                    #i3 = per_calc_style_loss(s3[rand_index], s3)
+                    i4 = per_calc_style_loss(s4[rand_index], s4)
+                    #i4 = per_calc_style_loss(adain_cs, s4)
+                    #intensity = i1 + i2+ i3+ i4
+
+                    i4 = smoothstep(i4.cpu(), x_min=20, x_max=200,N=3)
+                    intensity = i4
+                    R = intensity[same_group].mean()/(intensity[same_group].mean()+intensity[~same_group].mean())
+                    tmp = tmp + R
+                    tmp2 += 1.
+                    Avg = tmp / tmp2
+                    print(R)
+                    print(Avg)
+                    #print(intensity[same_group].mean())
+                    #print(intensity[~same_group].mean())
+
+                    #embed()
+                    #exit()
+                    mixImage = network_D(content, style, content_feat, content_feat[rand_index], alpha, beta, gamma, bbx1, bby1, bbx2, bby2)
+                lam = ((bbx2 - bbx1)*(bby2-bby1)/(224.*224.))
+                output  = model(mixImage)
+
+                loss_c = criterion(output, target_a) * (lam) + criterion(output, target_b) * (1. - lam)
+                #loss_s = criterion(output, target_a) * (beta) + criterion(output, target_b) * (1. - beta)
+                gamma = gamma.cuda()
+                sratio = gamma*lam + (1.0 - gamma) * beta
+                loss_s = criterion(output, target_a) * (sratio) + criterion(output, target_b) * (1. - sratio)
+                ratio = 0.8
+
+                if torch.is_tensor(gamma):
+                    #gamma = gamma.cuda()
+                    #loss = gamma*loss_c + (1.-gamma)*(ratio*loss_c+(1.-ratio)*loss_s)
+                    loss = ratio*loss_c + (1.- ratio)*loss_s
+                    loss = loss.mean()
             else :
                 None
             """
@@ -563,6 +710,15 @@ def test_transform(size, crop):
     transform_list.append(transforms.ToTensor())
     transform = transforms.Compose(transform_list)
     return transform
+
+def smoothstep(x, x_min = 0, x_max=1, N=1):
+    x = np.clip((x-x_min) / (x_max - x_min), 0, 1)
+    result = 0
+    for n in range(0, N+1):
+        result += comb(N+n,n) * comb(2*N+1, N-n) * (-x) **n
+
+    result *= x **(N+1)
+    return result
 
 """
 def rand_bbox(size, lam):

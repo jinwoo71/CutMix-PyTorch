@@ -156,7 +156,8 @@ class Net_E(nn.Module):
 
     def forward(self, content):
         content_feat = self.encode(content)
-        return content_feat
+        #s1,s2,s3,s4 = self.encode_with_intermediate(content)
+        return content_feat#,s1,s2,s3,s4
 
 
 class Net_D(nn.Module):
@@ -236,19 +237,26 @@ class Net_D(nn.Module):
         # x: x controls contents ratio(box parameters come from alpha)
         # y: y controls style ratio
         # z: z controls maximum style transfer
-
+        if torch.is_tensor(z):
+            z = z.view(-1,1,1,1)
         t_content_style = z*content + (1.-z)*self.decoder(adain(content_feat, style_feat))
         t_style_content = z*style + (1.-z)*self.decoder(adain(style_feat, content_feat))
-        M = torch.zeros(1,1,224,224).float()
+        M = torch.zeros(1,1,224,224).cuda()
+        Z = torch.zeros(1,1,224,224).cuda()
         M[:,:,bbx1:bbx2,bby1:bby2].fill_(1.)
         x = M
         y = y*M + y*(1.0-M)
         t = torch.rand(1,1,224,224).cuda()
-        min_ = np.maximum(0,x+y-1).cuda()
-        max_ = np.minimum(x,y).cuda()
+        #t = torch.ones(1,1,224,224).cuda()
+        #min_ = np.maximum(0,x+y-1).cuda()
+        #max_ = np.minimum(x,y).cuda()
+        min_ = torch.max(Z,x+y-1)
+        max_ = torch.min(x,y)
         t = (max_-min_)*t+min_
-        x = x.cuda()
-        y = y.cuda()
+        #t = (max_)*t
+        #x = x.cuda()
+        #y = y.cuda()
+
         output = t*content + (1.0-x-y+t)*style + (x-t)*t_content_style + (y-t)*t_style_content
         return output
 

@@ -4,6 +4,7 @@ import argparse
 import os
 import shutil
 import time
+import glob
 
 import torch
 import torch.nn as nn
@@ -36,7 +37,7 @@ from IPython import embed
 # Because part of the training data is truncated image
 from PIL import ImageFile
 ImageFile.LOAD_TRUNCATED_IMAGES = True
-
+from apex import amp
 from datetime import datetime
 from scipy.special import comb
 warnings.filterwarnings("ignore")
@@ -140,13 +141,16 @@ def main():
     global args, best_err1, best_err5
     args = parser.parse_args()
     print("args")
-    global decoder, vgg, pretrained
+    global decoder, vgg, pretrained, vgg_all
     decoder = net.decoder
     vgg = net.vgg
     decoder.eval()
     vgg.eval()
     decoder.load_state_dict(torch.load(args.decoder))
     vgg.load_state_dict(torch.load(args.vgg))
+    vgg_all = vgg
+    vgg_all.cuda()
+    vgg_all.eval()
     vgg = nn.Sequential(*list(vgg.children())[:31])
     vgg.cuda()
     decoder.cuda()
@@ -160,7 +164,7 @@ def main():
     network_E = torch.nn.DataParallel(network_E).cuda()
     network_D = torch.nn.DataParallel(network_D).cuda()
 
-    global msenone
+    global msenone,traindir,relationships
     msenone = nn.MSELoss(reduction='none')
     #Copula
     #global frank
@@ -168,6 +172,10 @@ def main():
     #y = args.param*x + np.random.normal(size=250)
     #frank = Copula(x,y,family='frank')
     #global group, group_info, group_list, numberofclass
+    relationships = open("wordnet.is_a.txt","r").readlines()
+    relationships = [relationship.replace("\n", "").split(" ") for relationship in relationships]
+    relationships = np.array(relationships) # [parent, child]
+
 
     if args.dataset.startswith('cifar'):
         normalize = transforms.Normalize(mean=[x / 255.0 for x in [125.3, 123.0, 113.9]],
@@ -208,15 +216,15 @@ def main():
         # Check here before running the code!
         # You need to check appropriate dataset
         ##############################################
-        #traindir = os.path.join('/home_goya/jinwoo.choi/ImageNet/train_100Class_400Each_V2/')
+        traindir = os.path.join('/home_goya/jinwoo.choi/ImageNet/train_100Class_400Each_V2/')
         #traindir = os.path.join('/home_goya/jinwoo.choi/ImageNet/train_20Class_400Each_V2/')
-        traindir = os.path.join('/home_goya/jinwoo.choi/ImageNet/train_66Class_300Each_M/')
+        #traindir = os.path.join('/home_goya/jinwoo.choi/ImageNet/train_66Class_300Each_M/')
         #traindir = os.path.join('/home_goya/jinwoo.choi/ImageNet/train/')
         #traindir = os.path.join('/home_goya/jinwoo.choi/ImageNet/train_250Class_400Each_V2/')
-        #valdir = os.path.join('/home_goya/jinwoo.choi/ImageNet/val_100Class_50Each_V2/')
+        valdir = os.path.join('/home_goya/jinwoo.choi/ImageNet/val_100Class_50Each_V2/')
         #valdir = os.path.join('/home_goya/jinwoo.choi/ImageNet/val_250Class_50Each_V2/')
         #valdir = os.path.join('/home_goya/jinwoo.choi/ImageNet/val_20Class_50Each_V2/')
-        valdir = os.path.join('/home_goya/jinwoo.choi/ImageNet/val_66Class_50Each_M/')
+        #valdir = os.path.join('/home_goya/jinwoo.choi/ImageNet/val_66Class_50Each_M/')
         #valdir = os.path.join('/home_goya/jinwoo.choi/ImageNet/val/')
         normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                          std=[0.229, 0.224, 0.225])
@@ -259,24 +267,25 @@ def main():
         # Check here before running the code!
         # You need to check numberofclass
         ############################################
-        numberofclass = 66#250
+        numberofclass = 100#66#250
 
     else:
         raise Exception('unknown dataset: {}'.format(args.dataset))
 
 
+    """
     c2i = train_dataset.class_to_idx
     group_list_raw = np.genfromtxt('group.txt', delimiter='\n', dtype='str')
     group_list = np.array([np.array(l.split(','), dtype=np.int) for l in group_list_raw])
     group_info = torch.zeros((66,))
     for i in range(group_list.shape[0]):
         for j in range(group_list[i].shape[0]):
-            group_info[c2i[str(group_list[i][j])]]=  i
+            group_info[c2i[str(group_list[i][j])]] =  i
     group_info = group_info.type(torch.LongTensor)
     print("c2i: ",c2i)
     for i in range(66):
         print(i, " : ", group_info[i])
-
+    """
 
     ###########################################
     # Check here before running the code!
@@ -297,7 +306,6 @@ def main():
     else:
         raise Exception('unknown network architecture: {}'.format(args.net_type))
 
-    model = torch.nn.DataParallel(model).cuda()
 
     print(model)
     print('the number of model parameters: {}'.format(sum([p.data.nelement() for p in model.parameters()])))
@@ -309,6 +317,10 @@ def main():
     optimizer = torch.optim.SGD(model.parameters(), args.lr,
                                 momentum=args.momentum,
                                 weight_decay=args.weight_decay, nesterov=True)
+
+    model.cuda()
+    model, optimizer = amp.initialize(model, optimizer, opt_level="O1", loss_scale=1024)
+    model = torch.nn.DataParallel(model).cuda()
 
     cudnn.benchmark = True
 
@@ -375,7 +387,7 @@ def train(train_loader, model, criterion, optimizer, epoch):
             if args.method == 'a' :
                 alpha = np.random.beta(1.0, 1.0)
                 beta = np.random.beta(1.0, 1.0)
-                gamma_ = np.random.beta(1.0, 1.0)
+                gamma_ = np.random.beta(args.param, args.param2)
                 gamma = gamma_*torch.ones(content.shape[0])
                 #alpha_, beta_ = frank.generate_uv(1)
                 #alpha = alpha_[0]
@@ -383,8 +395,8 @@ def train(train_loader, model, criterion, optimizer, epoch):
 
                 #class-wise stylemix
                 gamma = gamma*torch.ones(content.shape[0])
+                """
                 same_group = (group_info[target_a] == group_info[target_b])
-
 
                 if args.param4int == 1:
                     # same group style transfer
@@ -397,6 +409,7 @@ def train(train_loader, model, criterion, optimizer, epoch):
                     gamma[same_group] = 1.
                 else:
                     exit()
+                """
 
                 M = torch.zeros(1,1,224,224).float()
                 bbx1, bby1, bbx2, bby2 = rand_bbox(M.size(), 1.-alpha)
@@ -422,7 +435,7 @@ def train(train_loader, model, criterion, optimizer, epoch):
                 gamma = gamma.cuda()
                 #sratio = gamma*lam + (1.0 - gamma) * beta
                 #loss_s = criterion(output, target_a) * (sratio) + criterion(output, target_b) * (1. - sratio)
-                ratio = 0.8
+                ratio = args.param3
 
                 if torch.is_tensor(gamma):
                     #gamma = gamma.cuda()
@@ -447,6 +460,15 @@ def train(train_loader, model, criterion, optimizer, epoch):
                 gamma_ = np.random.beta(1.0, 1.0)
                 gamma = gamma_*torch.ones(content.shape[0])
 
+
+                data_path = traindir
+                embed()
+                img_classes = [img_path.split("/")[-1] for img_path in glob.glob(data_path + "/*")] # list with all classes [n..., n..., ...]
+
+
+                embed()
+                exit()
+
                 #class-wise stylemix
                 gamma = gamma*torch.ones(content.shape[0])
                 same_group = (group_info[target_a] == group_info[target_b])
@@ -455,11 +477,14 @@ def train(train_loader, model, criterion, optimizer, epoch):
                 with torch.no_grad():
                     #content_feat = network_E(content)
                     content_feat = network_E(content)
-                    s4 = content_feat
+                    #content_feata = vgg_all(content)
+                    #embed()
+                    #exit()
+                    #s4 = content_feat
                     #adain_cs = adain(content_feat, content_feat[rand_index])
                     #adain_sc = adain(content_feat[rand_index], content_feat)
                     #intensity = torch.mean(msenone(adain_cs, content_feat),dim=[1,2,3])
-                    #intensity = torch.mean(msenone(content_feat[rand_index], content_feat),dim=[1,2,3])
+                    intensity = torch.mean(msenone(content_feat[rand_index], content_feat),dim=[1,2,3])
                     #i1 = torch.mean(msenone(s1[rand_index], s1),dim=[1,2,3])
                     #i2 = torch.mean(msenone(s2[rand_index], s2),dim=[1,2,3])
                     #i3 = torch.mean(msenone(s3[rand_index], s3),dim=[1,2,3])
@@ -467,12 +492,12 @@ def train(train_loader, model, criterion, optimizer, epoch):
                     #i1 = per_calc_style_loss(s1[rand_index], s1)
                     #i2 = per_calc_style_loss(s2[rand_index], s2)
                     #i3 = per_calc_style_loss(s3[rand_index], s3)
-                    i4 = per_calc_style_loss(s4[rand_index], s4)
+                    #i4 = per_calc_style_loss(s4[rand_index], s4)
                     #i4 = per_calc_style_loss(adain_cs, s4)
                     #intensity = i1 + i2+ i3+ i4
 
-                    i4 = smoothstep(i4.cpu(), x_min=20, x_max=200,N=3)
-                    intensity = i4
+                    #i4 = smoothstep(i4.cpu(), x_min=20, x_max=200,N=9)
+                    #intensity = i4
                     R = intensity[same_group].mean()/(intensity[same_group].mean()+intensity[~same_group].mean())
                     tmp = tmp + R
                     tmp2 += 1.
@@ -535,7 +560,9 @@ def train(train_loader, model, criterion, optimizer, epoch):
         top5.update(err5.item(), input.size(0))
         # compute gradient and do SGD step
         optimizer.zero_grad()
-        loss.backward()
+        #loss.backward()
+        with amp.scale_loss(loss, optimizer) as scaled_loss:
+            scaled_loss.backward()
         optimizer.step()
 
         # measure elapsed time
@@ -557,6 +584,17 @@ def train(train_loader, model, criterion, optimizer, epoch):
         epoch, args.epochs, top1=top1, top5=top5, loss=losses))
 
     return losses.avg
+
+def search_parents(img_class, parents):
+    index = np.where(relationships == img_class)
+    is_child_index = np.where(index[1]==1)[0]
+
+    if len(is_child_index)>0:
+        parent, child = relationships[index[0][is_child_index]][0]
+        parents.append(parent)
+        return search_parents(parent, parents)
+    else:
+        return parents
 
 
 def rand_bbox(size, lam):

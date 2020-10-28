@@ -1,0 +1,11 @@
+python train.py \
+    --net_type pyramidnet \
+    --dataset cifar100 \
+    --depth 200 \
+    --alpha 240 \
+    --batch_size 256 \
+    --lr 0.25 \
+    --expname PyraNet200 \
+    --epochs 300 \
+    --beta 1.0 \
+    --no-verbose
